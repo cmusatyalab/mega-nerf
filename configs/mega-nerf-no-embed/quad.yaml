@@ -1,0 +1,4 @@
+ray_altitude_range: [-50, 45]
+val_scale_factor: 1
+appearance_dim: 0
+val_interval: 1000000
