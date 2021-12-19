@@ -75,6 +75,20 @@ body {
     height: 100%;
 }
 
+.mill-datasets {
+    width: 80%;
+}
+
+.data-image {
+    width: 80%;
+    margin-bottom: 2%;
+}
+
+td {
+    text-align: center;
+    font-size: 1.5em;
+}
+
 .paper-thumbnail {
     margin: 0 auto;
     width: 40%;
