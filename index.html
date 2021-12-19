@@ -1,0 +1,199 @@
+<link rel="stylesheet" href="./owlcarousel/owl.carousel.min.css">
+<link rel="stylesheet" href="./owlcarousel/owl.theme.default.min.css">
+<script src="./jquery/jquery-3.6.0.min.js"></script>
+<script src="./owlcarousel/owl.carousel.min.js"></script>
+
+<link href="https://fonts.googleapis.com/css2?family=Open+Sans&display=swap" rel="stylesheet">
+<link rel="stylesheet" type="text/css" href="./resources/style.css" media="screen"/>
+
+<html lang="en">
+<head>
+    <title>Mega-NeRF</title>
+    <!-- Facebook automatically scrapes this. Go to https://developers.facebook.com/tools/debug/
+        if you update and want to force Facebook to re-scrape. -->
+    <meta property="og:image" content="resources/network-overview.jpg"/>
+    <meta property="og:title" content="Mega-NeRF: Scalable Construction of Large-Scale NeRFs for Virtual Fly-Throughs"/>
+    <meta property="og:description"
+          content="We explore how to leverage neural radiance fields (NeRFs) to build interactive 3D environments from large-scale visual captures spanning buildings or even multiple city blocks collected primarily from drone data.  In contrast to the single object scenes against which NeRFs have been traditionally evaluated, this setting poses multiple challenges including (1) the need to incorporate thousands of images with varying lighting conditions, all of which capture only a small subset of the scene, (2) prohibitively high model capacity and ray sampling requirements beyond what can be naively trained on a single GPU, and (3) an arbitrarily large number of possible viewpoints that make it unfeasible to precompute all relevant information beforehand (as real-time NeRF renderers typically do). To address these challenges, we begin by analyzing visibility statistics for large-scale scenes, motivating a sparse network structure where parameters are specialized to different regions of the scene. We introduce a simple geometric clustering algorithm that partitions training images (or rather pixels) into different NeRF submodules that can be trained in parallel. We evaluate our approach across scenes taken from the Quad 6k and UrbanScene3D datasets as well as against our own drone footage and show a 3x training speedup while improving PSNR by over 11% on average. We subsequently perform an empirical evaluation of recent NeRF fast renderers on top of Mega-NeRF and introduce a novel method that exploits temporal coherence. Our technique achieves a 40x speedup over conventional NeRF rendering while remaining within 0.5 db in PSNR quality, exceeding the fidelity of existing fast renderers."/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-3LEJEZQQQC"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+
+        function gtag() {
+            dataLayer.push(arguments);
+        }
+
+        gtag('js', new Date());
+
+        gtag('config', 'G-3LEJEZQQQC');
+
+        $(document).ready(function () {
+            $('.teaser-videos').owlCarousel({
+                items: 1,
+                merge: true,
+                loop: true,
+                stagePadding: $('.teaser-videos').width() * 0.1,
+                margin: $('.teaser-videos').width() * 0.02,
+                lazyLoad: true,
+                center: true,
+            })
+
+            $('.longer-videos').owlCarousel({
+                items: 1,
+                merge: true,
+                loop: true,
+                margin: $('.teaser-videos').width() * 0.02,
+                video: true,
+                lazyLoad: true,
+                center: true,
+            })
+        });
+    </script>
+
+</head>
+
+<body>
+<div class="container">
+    <div class="title">
+        Mega-NeRF: Scalable Construction of Large-Scale NeRFs for Virtual Fly-Throughs
+    </div>
+
+    <br>
+    <br>
+
+    <div class="author">
+        <a href="https://haithemturki.com">Haithem Turki</a><sup>1</sup>
+    </div>
+    <div class="author">
+        <a href="http://www.cs.cmu.edu/~deva">Deva Ramanan</a><sup>1,2</sup>
+    </div>
+    <div class="author">
+        <a href="https://www.cs.cmu.edu/~satya">Mahadev Satyanarayanan</a><sup>1</sup>
+    </div>
+
+    <br>
+    <br>
+
+    <div class="affiliation"><sup>1&nbsp;</sup>Carnegie Mellon University</div>
+    <div class="affiliation"><sup>2&nbsp;</sup>Argo AI</div>
+
+    <br>
+    <br>
+
+    <div class="links"><a href="resources/paper.pdf">[Paper]</a></div>
+    <div class="links"><a href="https://github.com/cmusatyalab/mega-nerf">[Code]</a></div>
+    <div class="links">[Data]</div>
+
+    <br>
+    <br>
+    <div class="teaser">
+        <img class="network" src="./resources/network-overview.jpg" alt="Network overview."/>
+
+        <div class="owl-carousel owl-theme teaser-videos">
+            <div class="item-video teaser-video">
+                <video controls preload="auto" width="100%" poster="" loop autoplay class="top-video">
+                    <source src="./resources/rubble-flythrough.mp4" type='video/mp4'/>
+                </video>
+            </div>
+            <div class="item-video teaser-video">
+                <video controls preload="auto" width="100%" poster="" loop autoplay class="top-video">
+                    <source src="./resources/building-flythrough.mp4" type='video/mp4'/>
+                </video>
+            </div>
+            <div class="item-video teaser-video">
+                <video controls preload="auto" width="100%" poster="" loop autoplay class="top-video">
+                    <source src="./resources/residence-flythrough.mp4" type='video/mp4'/>
+                </video>
+            </div>
+            <div class="item-video teaser-video">
+                <video controls preload="auto" width="100%" poster="" loop autoplay class="top-video">
+                    <source src="./resources/sci-art-flythrough.mp4" type='video/mp4'/>
+                </video>
+            </div>
+        </div>
+    </div>
+
+    <br><br>
+    <hr>
+
+    <h1>Abstract</h1>
+    <p>
+        We explore how to leverage neural radiance fields (NeRFs) to build interactive 3D environments from large-scale
+        visual captures spanning buildings or even multiple city blocks collected primarily from drone data. In contrast
+        to the single object scenes against which NeRFs have been traditionally evaluated, this setting poses multiple
+        challenges including (1) the need to incorporate thousands of images with varying lighting conditions, all of
+        which capture only a small subset of the scene, (2) prohibitively high model capacity and ray sampling
+        requirements beyond what can be naively trained on a single GPU, and (3) an arbitrarily large number of possible
+        viewpoints that make it unfeasible to precompute all relevant information beforehand (as real-time NeRF
+        renderers typically do).<br/>
+
+        To address these challenges, we begin by analyzing visibility statistics for large-scale scenes, motivating a
+        sparse network structure where parameters are specialized to different regions of the scene. We introduce a
+        simple geometric clustering algorithm that partitions training images (or rather pixels) into different NeRF
+        submodules that can be trained in parallel. We evaluate our approach across scenes taken from the Quad 6k and
+        UrbanScene3D datasets as well as against our own drone footage and show a 3x training speedup while improving
+        PSNR by over 11% on average. We subsequently perform an empirical evaluation of recent NeRF fast renderers on
+        top of Mega-NeRF and introduce a novel method that exploits temporal coherence. Our technique achieves a 40x
+        speedup over conventional NeRF rendering while remaining within 0.5 db in PSNR quality, exceeding the fidelity
+        of existing fast renderers.
+    </p>
+
+    <br><br>
+    <hr>
+
+    <!--    <h1>Paper</h1>-->
+
+    <!--    <div class="paper-thumbnail">-->
+    <!--        <a href="https://arxiv.org">-->
+    <!--            <img class="layered-paper-big" width="100%" src="./resources/paper.png" alt="Paper thumbnail."/>-->
+    <!--        </a>-->
+    <!--    </div>-->
+    <!--    <div class="paper-info">-->
+    <!--        <h4>Mega-NeRF: Scalable Construction of Large-Scale NeRFs for Virtual Fly-Throughs</h4>-->
+    <!--        <h5>-->
+    <!--            Haithem Turki, Deva Ramanan, Mahadev Satyanarayanan-->
+    <!--        </h5>-->
+    <!--        <pre><code>@InProceedings{author20XXtitle,-->
+    <!--    title = {Creative and Descriptive Paper Title},-->
+    <!--    author = {Author, First and Author, Second and Author, Third and Author, Fourth and Author, Fifth},-->
+    <!--    booktitle = {Conference},-->
+    <!--    year = {20XX},-->
+    <!--}</code></pre>-->
+    <!--    </div>-->
+
+    <!--    <br><br><hr><br>-->
+
+    <h1>Longer Fly-Throughs</h1>
+
+    <div class="owl-carousel owl-theme longer-videos">
+        <div class="item-video video-container">
+            <iframe src="https://www.youtube.com/embed/t_xfRmZtR7k" frameBorder="0"
+                    allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture"
+                    allowfullscreen></iframe>
+        </div>
+        <div class="item-video video-container">
+            <iframe src="https://www.youtube.com/embed/yjMsRJYKBms" frameBorder="0"
+                    allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture"
+                    allowfullscreen></iframe>
+        </div>
+    </div>
+
+
+    <br><br>
+    <hr>
+    <h1>Acknowledgements</h1>
+    <p>
+        This work was supported by the National Science Foundation under grant number CNS-2106862,
+        the <a href="https://labs.ri.cmu.edu/argo-ai-center/">CMU Argo AI Center for Autonomous Vehicle Research</a>,
+        the <a href="https://www.openedgecomputing.org/living-edge-lab/">Living Edge Lab</a>, and the
+        <a href="http://openedgecomputing.org">Open Edge Computing Initiative</a> at Carnegie Mellon University.
+    </p>
+
+    <br><br>
+</div>
+
+</body>
+
+</html>
