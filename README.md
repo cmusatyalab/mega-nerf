@@ -1,10 +1,23 @@
 # Mega-NeRF
 
-This repository contains the code needed to train Mega-NeRF models and generate the sparse voxel octrees used by the Mega-NeRF-Dynamic viewer.
+This repository contains the code needed to train [Mega-NeRF](https://meganerf.cmusatyalab.org/) models and generate the sparse voxel octrees used by the Mega-NeRF-Dynamic viewer.
 
 The codebase for the Mega-NeRF-Dynamic viewer can be found [here](https://github.com/cmusatyalab/mega-nerf-viewer).
 
 **Note:** This is a preliminary release and there may still be outstanding bugs.
+
+## Citation
+
+```
+@misc{turki2021meganerf,
+      title={Mega-NeRF: Scalable Construction of Large-Scale NeRFs for Virtual Fly-Throughs}, 
+      author={Haithem Turki and Deva Ramanan and Mahadev Satyanarayanan},
+      year={2021},
+      eprint={2112.10703},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV}
+}
+```
 
 ## Demo
 ![](demo/rubble-orbit.gif)
