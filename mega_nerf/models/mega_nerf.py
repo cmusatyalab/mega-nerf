@@ -14,8 +14,7 @@ class MegaNeRF(nn.Module):
         self.xyz_real = xyz_real
         self.register_buffer('joint_training', torch.ones(1) if joint_training else torch.zeros(1), persistent=False)
 
-    def forward(self, x: torch.Tensor, sigma_only: bool = False,
-                sigma_noise: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, sigma_only: bool = False) -> torch.Tensor:
         cluster_distances = torch.cdist(x[:, :3], self.centroids)
         inverse_cluster_distances = 1 / (cluster_distances + 1e-8)
 
@@ -30,8 +29,7 @@ class MegaNeRF(nn.Module):
             sub_input = x[cluster_mask, 3:] if self.xyz_real else x[cluster_mask]
 
             if sub_input.shape[0] > 0:
-                sub_result = child(sub_input, sigma_only,
-                                   sigma_noise[cluster_mask] if sigma_noise is not None else None)
+                sub_result = child(sub_input, sigma_only)
 
                 if results.shape[0] == 0:
                     results = torch.zeros(x.shape[0], sub_result.shape[1], device=sub_result.device,
@@ -39,8 +37,7 @@ class MegaNeRF(nn.Module):
 
                 results[cluster_mask] += sub_result * weights[cluster_mask, i].unsqueeze(-1)
             elif self.joint_training > 0:  # Hack to make distributed training happy
-                sub_result = child(x[:0, 3:] if self.xyz_real else x[:0], sigma_only,
-                                   sigma_noise[cluster_mask] if sigma_noise is not None else None)
+                sub_result = child(x[:0, 3:] if self.xyz_real else x[:0], sigma_only)
 
                 if results.shape[0] == 0:
                     results = torch.empty(x.shape[0], sub_result.shape[1], device=sub_result.device,

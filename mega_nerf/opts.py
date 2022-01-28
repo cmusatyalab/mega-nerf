@@ -16,7 +16,7 @@ def get_opts_base():
     parser.add_argument('--ckpt_path', type=str, default=None)
     parser.add_argument('--container_path', type=str, default=None)
 
-    parser.add_argument('--near', type=float, default=0)
+    parser.add_argument('--near', type=float, default=1)
     parser.add_argument('--far', type=float, default=None)
     parser.add_argument('--ray_altitude_range', nargs='+', type=float, default=None)
     parser.add_argument('--coarse_samples', type=int, default=256,
