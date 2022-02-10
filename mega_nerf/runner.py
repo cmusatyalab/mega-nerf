@@ -10,7 +10,6 @@ from argparse import Namespace
 from collections import defaultdict
 from pathlib import Path
 from typing import Tuple, List, Optional, Dict, Union
-from zipfile import ZipFile
 
 import cv2
 import numpy as np
@@ -252,6 +251,9 @@ class Runner:
 
                     with torch.no_grad():
                         for key, val in metrics.items():
+                            if key == 'psnr' and math.isinf(val): # a perfect reproduction will give PSNR = infinity
+                                continue
+
                             if not math.isfinite(val):
                                 raise Exception('Train metrics not finite: {}'.format(metrics))
 
@@ -295,15 +297,15 @@ class Runner:
             self._save_checkpoint(optimizers, scaler, train_iterations, dataset_index,
                                   dataset.get_state() if self.hparams.dataset_type == 'filesystem' else None)
 
-        self._run_validation(train_iterations)
-
-        if self.is_master:
-            self.writer.flush()
+        val_metrics = self._run_validation(train_iterations)
+        self._write_final_metrics(val_metrics)
 
     def eval(self):
         self._setup_experiment_dir()
         val_metrics = self._run_validation(0)
+        self._write_final_metrics(val_metrics)
 
+    def _write_final_metrics(self, val_metrics):
         if self.is_master:
             with (self.experiment_path / 'metrics.txt').open('w') as f:
                 for key in val_metrics:

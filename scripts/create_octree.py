@@ -42,7 +42,7 @@ def _get_extraction_opts() -> Namespace:
     parser = get_opts_base()
 
     parser.add_argument('--dataset_path', type=str, required=True)
-    parser.add_argument('--output', type=str, default=None)
+    parser.add_argument('--output', type=str, required=True)
     parser.add_argument('--alpha_thresh', type=float, default=0.01)
     parser.add_argument('--scale_alpha_thresh', type=float, default=0.01)
     parser.add_argument('--max_refine_prop', type=float, default=0.5)

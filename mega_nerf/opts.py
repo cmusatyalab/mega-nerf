@@ -25,6 +25,7 @@ def get_opts_base():
                         help='number of additional fine samples')
 
     parser.add_argument('--train_scale_factor', type=int, default=1)
+    parser.add_argument('--val_scale_factor', type=int, default=4)
 
     parser.add_argument('--pos_xyz_dim', type=int, default=12)
     parser.add_argument('--pos_dir_dim', type=int, default=4)
@@ -37,7 +38,7 @@ def get_opts_base():
     parser.add_argument('--use_cascade', default=False, action='store_true')
 
     parser.add_argument('--train_mega_nerf', type=str, default=None)
-    parser.add_argument('--boundary_margin', type=int, default=1.15)
+    parser.add_argument('--boundary_margin', type=float, default=1.15)
 
     parser.add_argument('--sh_deg', type=int, default=None)
 
@@ -59,7 +60,7 @@ def get_opts_base():
     parser.add_argument('--no_ellipse_bounds', dest='ellipse_bounds', default=True, action='store_false')
 
     parser.add_argument('--train_iterations', type=int, default=500000)
-    parser.add_argument('--val_interval', type=int, default=50000)
+    parser.add_argument('--val_interval', type=int, default=500000)
     parser.add_argument('--ckpt_interval', type=int, default=10000)
 
     parser.add_argument('--no_amp', dest='amp', default=True, action='store_false')

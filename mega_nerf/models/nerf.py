@@ -92,7 +92,8 @@ class NeRF(nn.Module):
             self.xyz_encoding_final = None
 
         # output layers
-        self.sigma = nn.Sequential(nn.Linear(layer_dim, 1), sigma_activation)
+        self.sigma = nn.Linear(layer_dim, 1)
+        self.sigma_activation = sigma_activation
 
         rgb = nn.Linear(layer_dim // 2 if (pos_dir_dim > 0 or appearance_dim > 0) else layer_dim, rgb_dim)
         if rgb_dim == 3:
@@ -100,7 +101,8 @@ class NeRF(nn.Module):
         else:
             self.rgb = rgb  # We're using spherical harmonics and will convert to sigmoid in rendering.py
 
-    def forward(self, x: torch.Tensor, sigma_only: bool = False) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, sigma_only: bool = False,
+                sigma_noise: Optional[torch.Tensor] = None) -> torch.Tensor:
         expected = self.xyz_dim \
                    + (0 if (sigma_only or self.embedding_dir is None) else 3) \
                    + (0 if (sigma_only or self.embedding_a is None) else 1)
@@ -117,6 +119,10 @@ class NeRF(nn.Module):
             xyz_ = xyz_encoding(xyz_)
 
         sigma = self.sigma(xyz_)
+        if sigma_noise is not None:
+            sigma += sigma_noise
+
+        sigma = self.sigma_activation(sigma)
 
         if sigma_only:
             return sigma

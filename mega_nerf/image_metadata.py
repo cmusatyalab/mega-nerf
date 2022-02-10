@@ -36,9 +36,6 @@ class ImageMetadata:
         if self._mask_path is None:
             return None
 
-        if self.is_val:
-            return torch.ones(self.H, self.W, dtype=torch.bool)
-
         with ZipFile(self._mask_path) as zf:
             with zf.open(self._mask_path.name) as f:
                 keep_mask = torch.load(f, map_location='cpu')

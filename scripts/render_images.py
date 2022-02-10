@@ -23,7 +23,6 @@ def _get_render_opts() -> Namespace:
     parser.add_argument('--input', type=str, required=True)
     parser.add_argument('--output', type=str, required=True)
     parser.add_argument('--resume', default=False, action='store_true')
-    parser.add_argument('--val_scale_factor', type=int, default=1)
 
     return parser.parse_args()
 

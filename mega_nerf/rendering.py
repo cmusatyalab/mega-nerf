@@ -298,11 +298,13 @@ def _inference(results: Dict[str, torch.Tensor],
 
         for i in range(0, B, hparams.model_chunk_size):
             xyz_chunk = xyz_[i:i + hparams.model_chunk_size]
+            sigma_noise = torch.rand(len(xyz_chunk), 1, device=xyz_chunk.device) if nerf.training else None
 
             if image_indices is not None:
-                model_chunk = nerf(torch.cat([xyz_chunk, image_indices_[i:i + hparams.model_chunk_size]], 1))
+                model_chunk = nerf(torch.cat([xyz_chunk, image_indices_[i:i + hparams.model_chunk_size]], 1),
+                                   sigma_noise=sigma_noise)
             else:
-                model_chunk = nerf(xyz_chunk)
+                model_chunk = nerf(xyz_chunk, sigma_noise=sigma_noise)
 
             if hparams.sh_deg is not None:
                 rgb = torch.sigmoid(
@@ -323,7 +325,9 @@ def _inference(results: Dict[str, torch.Tensor],
                                     image_indices_[i:i + hparams.model_chunk_size]], 1)
             else:
                 xyzdir = torch.cat([xyz_chunk, rays_d_[i:i + hparams.model_chunk_size]], 1)
-            out_chunks += [nerf(xyzdir)]
+
+            sigma_noise = torch.rand(len(xyz_chunk), 1, device=xyz_chunk.device) if nerf.training else None
+            out_chunks += [nerf(xyzdir, sigma_noise=sigma_noise)]
 
     out = torch.cat(out_chunks, 0)
     out = out.view(N_rays_, N_samples_, out.shape[-1])
@@ -354,12 +358,7 @@ def _inference(results: Dict[str, torch.Tensor],
         deltas = z_vals[:, 1:] - z_vals[:, :-1]  # (N_rays, N_samples_-1)
 
     deltas = torch.cat([deltas, last_delta], -1)  # (N_rays, N_samples_)
-    if nerf.training:
-        sigma_factor = F.relu(sigmas + hparams.noise_std * torch.randn_like(sigmas))
-    else:
-        sigma_factor = sigmas
-
-    alphas = 1 - torch.exp(-deltas * sigma_factor)  # (N_rays, N_samples_)
+    alphas = 1 - torch.exp(-deltas * sigmas)  # (N_rays, N_samples_)
 
     T = torch.cumprod(1 - alphas + 1e-8, -1)
     if get_bg_lambda:

@@ -12,7 +12,6 @@ def _get_train_opts() -> Namespace:
 
     parser.add_argument('--exp_name', type=str, required=True, help='experiment name')
     parser.add_argument('--dataset_path', type=str, required=True)
-    parser.add_argument('--val_scale_factor', type=int, default=8)
 
     return parser.parse_args()
 
