@@ -28,8 +28,9 @@ def _get_nerf_inner(hparams: Namespace, appearance_count: int, layer_dim: int, x
             return MegaNeRF([getattr(container, 'bg_sub_module_{}'.format(i)) for i in range(len(container.centroids))],
                             container.centroids, hparams.boundary_margin, True)
     elif hparams.use_cascade:
-        nerf = Cascade(_get_single_nerf_inner(hparams, appearance_count, layer_dim, xyz_dim),
-                       _get_single_nerf_inner(hparams, appearance_count, layer_dim, xyz_dim))
+        nerf = Cascade(
+            _get_single_nerf_inner(hparams, appearance_count, layer_dim, xyz_dim),
+            _get_single_nerf_inner(hparams, appearance_count, layer_dim, xyz_dim))
     elif hparams.train_mega_nerf is not None:
         centroids = torch.load(hparams.train_mega_nerf, map_location='cpu')['centroids']
         nerf = MegaNeRF(
@@ -58,6 +59,7 @@ def _get_single_nerf_inner(hparams: Namespace, appearance_count: int, layer_dim:
                 hparams.skip_layers,
                 layer_dim,
                 hparams.appearance_dim,
+                hparams.affine_appearance,
                 appearance_count,
                 rgb_dim,
                 xyz_dim,

@@ -459,6 +459,9 @@ def _depth2pts_outside(rays_o: torch.Tensor, rays_d: torch.Tensor, depth: torch.
     if include_xyz_real:
         boundary = rays_o_orig + rays_d_orig * (d1 + d2).unsqueeze(-1)
         pts = torch.cat((boundary.repeat(1, p_sphere_new.shape[1], 1), p_sphere_new, depth.unsqueeze(-1)), dim=-1)
+        # pts = torch.cat(
+        #     (rays_o_orig + rays_d_orig * depth_real.unsqueeze(-1), p_sphere_new, depth.unsqueeze(-1)),
+        #     dim=-1)
     else:
         pts = torch.cat((p_sphere_new, depth.unsqueeze(-1)), dim=-1)
 

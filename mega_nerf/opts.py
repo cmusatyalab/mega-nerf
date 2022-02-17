@@ -34,6 +34,7 @@ def get_opts_base():
     parser.add_argument('--layer_dim', type=int, default=256)
     parser.add_argument('--bg_layer_dim', type=int, default=256)
     parser.add_argument('--appearance_dim', type=int, default=48, help='number of embeddings for appearance')
+    parser.add_argument('--affine_appearance', default=False, action='store_true')
 
     parser.add_argument('--use_cascade', default=False, action='store_true')
 

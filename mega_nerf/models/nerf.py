@@ -44,7 +44,8 @@ class ShiftedSoftplus(nn.Module):
 
 class NeRF(nn.Module):
     def __init__(self, pos_xyz_dim: int, pos_dir_dim: int, layers: int, skip_layers: List[int], layer_dim: int,
-                 appearance_dim: int, appearance_count: int, rgb_dim: int, xyz_dim: int, sigma_activation: nn.Module):
+                 appearance_dim: int, affine_appearance: bool, appearance_count: int, rgb_dim: int, xyz_dim: int,
+                 sigma_activation: nn.Module):
         super(NeRF, self).__init__()
         self.xyz_dim = xyz_dim
 
@@ -83,11 +84,19 @@ class NeRF(nn.Module):
         else:
             self.embedding_a = None
 
-        if pos_dir_dim > 0 or appearance_dim > 0:
+        if affine_appearance:
+            assert appearance_dim > 0
+            self.affine = nn.Linear(appearance_dim, 12)
+        else:
+            self.affine = None
+
+        if pos_dir_dim > 0 or (appearance_dim > 0 and not affine_appearance):
             self.xyz_encoding_final = nn.Linear(layer_dim, layer_dim)
             # direction and appearance encoding layers
-            self.dir_a_encoding = nn.Sequential(nn.Linear(layer_dim + in_channels_dir + appearance_dim, layer_dim // 2),
-                                                nn.ReLU(True))
+            self.dir_a_encoding = nn.Sequential(
+                nn.Linear(layer_dim + in_channels_dir + (appearance_dim if not affine_appearance else 0),
+                          layer_dim // 2),
+                nn.ReLU(True))
         else:
             self.xyz_encoding_final = None
 
@@ -95,11 +104,13 @@ class NeRF(nn.Module):
         self.sigma = nn.Linear(layer_dim, 1)
         self.sigma_activation = sigma_activation
 
-        rgb = nn.Linear(layer_dim // 2 if (pos_dir_dim > 0 or appearance_dim > 0) else layer_dim, rgb_dim)
+        self.rgb = nn.Linear(
+            layer_dim // 2 if (pos_dir_dim > 0 or (appearance_dim > 0 and not affine_appearance)) else layer_dim,
+            rgb_dim)
         if rgb_dim == 3:
-            self.rgb = nn.Sequential(rgb, nn.Sigmoid())
+            self.rgb_activation = nn.Sigmoid() # = nn.Sequential(rgb, nn.Sigmoid())
         else:
-            self.rgb = rgb  # We're using spherical harmonics and will convert to sigmoid in rendering.py
+            self.rgb_activation = None  # We're using spherical harmonics and will convert to sigmoid in rendering.py
 
     def forward(self, x: torch.Tensor, sigma_only: bool = False,
                 sigma_noise: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -134,7 +145,7 @@ class NeRF(nn.Module):
             if self.embedding_dir is not None:
                 dir_a_encoding_input.append(self.embedding_dir(x[:, -4:-1]))
 
-            if self.embedding_a is not None:
+            if self.embedding_a is not None and self.affine is None:
                 dir_a_encoding_input.append(self.embedding_a(x[:, -1].long()))
 
             dir_a_encoding = self.dir_a_encoding(torch.cat(dir_a_encoding_input, -1))
@@ -142,4 +153,8 @@ class NeRF(nn.Module):
         else:
             rgb = self.rgb(xyz_)
 
-        return torch.cat([rgb, sigma], -1)
+        if self.affine is not None and self.embedding_a is not None:
+            affine_transform = self.affine(self.embedding_a(x[:, -1].long())).view(-1, 3, 4)
+            rgb = (affine_transform[:, :, :3] @ rgb.unsqueeze(-1) + affine_transform[:, :, 3:]).squeeze(-1)
+
+        return torch.cat([self.rgb_activation(rgb), sigma], -1)
