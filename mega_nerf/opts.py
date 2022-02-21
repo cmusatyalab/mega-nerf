@@ -40,6 +40,7 @@ def get_opts_base():
 
     parser.add_argument('--train_mega_nerf', type=str, default=None)
     parser.add_argument('--boundary_margin', type=float, default=1.15)
+    parser.add_argument('--all_val', default=False, action='store_true')
 
     parser.add_argument('--sh_deg', type=int, default=None)
 

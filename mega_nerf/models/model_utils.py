@@ -29,7 +29,9 @@ def _get_nerf_inner(hparams: Namespace, appearance_count: int, layer_dim: int, x
                             container.centroids, hparams.boundary_margin, True)
     elif hparams.use_cascade:
         nerf = Cascade(
-            _get_single_nerf_inner(hparams, appearance_count, layer_dim, xyz_dim),
+            _get_single_nerf_inner(hparams, appearance_count,
+                                   layer_dim if xyz_dim == 4 else layer_dim,
+                                   xyz_dim),
             _get_single_nerf_inner(hparams, appearance_count, layer_dim, xyz_dim))
     elif hparams.train_mega_nerf is not None:
         centroids = torch.load(hparams.train_mega_nerf, map_location='cpu')['centroids']

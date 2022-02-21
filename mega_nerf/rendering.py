@@ -186,17 +186,9 @@ def _get_results(nerf: nn.Module,
     last_delta_diff = torch.zeros_like(last_delta)
     last_delta_diff[last_delta.squeeze() < 1e10, 0] = z_vals[last_delta.squeeze() < 1e10].max(dim=-1)[0]
 
-    if hparams.use_cascade:
-        if 'RANK' in os.environ:
-            to_use = nerf.module.coarse
-        else:
-            to_use = nerf.coarse
-    else:
-        to_use = nerf
-
     _inference(results=results,
                typ='coarse',
-               nerf=to_use,
+               nerf=nerf,
                rays_d=rays_d,
                image_indices=image_indices,
                hparams=hparams,
@@ -226,17 +218,9 @@ def _get_results(nerf: nn.Module,
         last_delta_diff = torch.zeros_like(last_delta)
         last_delta_diff[last_delta.squeeze() < 1e10, 0] = fine_z_vals[last_delta.squeeze() < 1e10].max(dim=-1)[0]
 
-        if hparams.use_cascade:
-            if 'RANK' in os.environ:
-                to_use = nerf.module.fine
-            else:
-                to_use = nerf.fine
-        else:
-            to_use = nerf
-
         _inference(results=results,
                    typ='fine',
-                   nerf=to_use,
+                   nerf=nerf,
                    rays_d=rays_d,
                    image_indices=image_indices,
                    hparams=hparams,
@@ -298,11 +282,13 @@ def _inference(results: Dict[str, torch.Tensor],
 
         for i in range(0, B, hparams.model_chunk_size):
             xyz_chunk = xyz_[i:i + hparams.model_chunk_size]
+            if image_indices is not None:
+                xyz_chunk = torch.cat([xyz_chunk, image_indices_[i:i + hparams.model_chunk_size]], 1)
+
             sigma_noise = torch.rand(len(xyz_chunk), 1, device=xyz_chunk.device) if nerf.training else None
 
-            if image_indices is not None:
-                model_chunk = nerf(torch.cat([xyz_chunk, image_indices_[i:i + hparams.model_chunk_size]], 1),
-                                   sigma_noise=sigma_noise)
+            if hparams.use_cascade:
+                model_chunk = nerf(typ == 'coarse', xyz_chunk, sigma_noise=sigma_noise)
             else:
                 model_chunk = nerf(xyz_chunk, sigma_noise=sigma_noise)
 
@@ -320,14 +306,20 @@ def _inference(results: Dict[str, torch.Tensor],
             xyz_chunk = xyz_[i:i + hparams.model_chunk_size]
 
             if image_indices is not None:
-                xyzdir = torch.cat([xyz_chunk,
-                                    rays_d_[i:i + hparams.model_chunk_size],
-                                    image_indices_[i:i + hparams.model_chunk_size]], 1)
+                xyz_chunk = torch.cat([xyz_chunk,
+                                       rays_d_[i:i + hparams.model_chunk_size],
+                                       image_indices_[i:i + hparams.model_chunk_size]], 1)
             else:
-                xyzdir = torch.cat([xyz_chunk, rays_d_[i:i + hparams.model_chunk_size]], 1)
+                xyz_chunk = torch.cat([xyz_chunk, rays_d_[i:i + hparams.model_chunk_size]], 1)
 
             sigma_noise = torch.rand(len(xyz_chunk), 1, device=xyz_chunk.device) if nerf.training else None
-            out_chunks += [nerf(xyzdir, sigma_noise=sigma_noise)]
+
+            if hparams.use_cascade:
+                model_chunk = nerf(typ == 'coarse', xyz_chunk, sigma_noise=sigma_noise)
+            else:
+                model_chunk = nerf(xyz_chunk, sigma_noise=sigma_noise)
+
+            out_chunks += [model_chunk]
 
     out = torch.cat(out_chunks, 0)
     out = out.view(N_rays_, N_samples_, out.shape[-1])

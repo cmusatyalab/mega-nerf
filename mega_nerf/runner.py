@@ -36,7 +36,7 @@ from mega_nerf.rendering import render_rays
 
 
 class Runner:
-    def __init__(self, hparams: Namespace, set_experiment_path: bool=True):
+    def __init__(self, hparams: Namespace, set_experiment_path: bool = True):
         faulthandler.register(signal.SIGUSR1)
 
         if hparams.ckpt_path is not None:
@@ -251,7 +251,7 @@ class Runner:
 
                     with torch.no_grad():
                         for key, val in metrics.items():
-                            if key == 'psnr' and math.isinf(val): # a perfect reproduction will give PSNR = infinity
+                            if key == 'psnr' and math.isinf(val):  # a perfect reproduction will give PSNR = infinity
                                 continue
 
                             if not math.isfinite(val):
@@ -297,8 +297,9 @@ class Runner:
             self._save_checkpoint(optimizers, scaler, train_iterations, dataset_index,
                                   dataset.get_state() if self.hparams.dataset_type == 'filesystem' else None)
 
-        val_metrics = self._run_validation(train_iterations)
-        self._write_final_metrics(val_metrics)
+        if self.hparams.cluster_mask_path is not None:
+            val_metrics = self._run_validation(train_iterations)
+            self._write_final_metrics(val_metrics)
 
     def eval(self):
         self._setup_experiment_dir()
@@ -548,12 +549,12 @@ class Runner:
                 if self.hparams.appearance_dim > 0 else None
             results = {}
 
-            if 'RANK' in os.environ and not self.hparams.use_cascade:  # Cascade will get unwrapped in render_rays
+            if 'RANK' in os.environ:
                 nerf = self.nerf.module
             else:
                 nerf = self.nerf
 
-            if self.bg_nerf is not None and 'RANK' in os.environ and not self.hparams.use_cascade:
+            if self.bg_nerf is not None and 'RANK' in os.environ:
                 bg_nerf = self.bg_nerf.module
             else:
                 bg_nerf = self.bg_nerf
@@ -645,7 +646,7 @@ class Runner:
         mask_path = Path(
             self.hparams.cluster_mask_path) / metadata_path.name if self.hparams.cluster_mask_path is not None else None
         return ImageMetadata(image_path, metadata['c2w'], metadata['W'] // scale_factor, metadata['H'] // scale_factor,
-                             intrinsics, image_index, mask_path, is_val)
+                             intrinsics, image_index, None if (is_val and self.hparams.all_val) else mask_path, is_val)
 
     def _get_experiment_path(self) -> Path:
         exp_dir = Path(self.hparams.exp_name)

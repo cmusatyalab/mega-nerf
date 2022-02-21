@@ -108,7 +108,7 @@ class NeRF(nn.Module):
             layer_dim // 2 if (pos_dir_dim > 0 or (appearance_dim > 0 and not affine_appearance)) else layer_dim,
             rgb_dim)
         if rgb_dim == 3:
-            self.rgb_activation = nn.Sigmoid() # = nn.Sequential(rgb, nn.Sigmoid())
+            self.rgb_activation = nn.Sigmoid()  # = nn.Sequential(rgb, nn.Sigmoid())
         else:
             self.rgb_activation = None  # We're using spherical harmonics and will convert to sigmoid in rendering.py
 
@@ -157,4 +157,4 @@ class NeRF(nn.Module):
             affine_transform = self.affine(self.embedding_a(x[:, -1].long())).view(-1, 3, 4)
             rgb = (affine_transform[:, :, :3] @ rgb.unsqueeze(-1) + affine_transform[:, :, 3:]).squeeze(-1)
 
-        return torch.cat([self.rgb_activation(rgb), sigma], -1)
+        return torch.cat([self.rgb_activation(rgb) if self.rgb_activation is not None else rgb, sigma], -1)

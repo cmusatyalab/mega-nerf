@@ -1,4 +1,3 @@
 ray_altitude_range: [-50, 45]
 val_scale_factor: 1
-#appearance_dim: 4
-affine_appearance: True
+all_val: True

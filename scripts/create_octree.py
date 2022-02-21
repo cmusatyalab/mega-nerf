@@ -213,8 +213,11 @@ def main(hparams: Namespace) -> None:
     assert hparams.ray_altitude_range is not None
 
     dataset_path = Path(hparams.dataset_path)
-    metadata_paths = list((dataset_path / 'train' / 'metadata').iterdir()) \
-                     + list((dataset_path / 'val' / 'metadata').iterdir())
+    train_path_candidates = sorted(list((dataset_path / 'train' / 'metadata').iterdir()))
+    train_paths = [train_path_candidates[i] for i in
+                   range(0, len(train_path_candidates), hparams.train_every)]
+
+    metadata_paths = train_paths + list((dataset_path / 'val' / 'metadata').iterdir())
 
     poses = torch.cat([torch.load(x)['c2w'].unsqueeze(0) for x in metadata_paths])
 
