@@ -179,7 +179,7 @@ class Runner:
                 optimizer_dict = optimizer.state_dict()
                 optimizer_dict.update(checkpoint['optimizers'][key])
                 optimizer.load_state_dict(optimizer_dict)
-            discard_index = checkpoint['dataset_index']
+            discard_index = checkpoint['dataset_index'] if self.hparams.resume_ckpt_state else -1
         else:
             train_iterations = 0
             discard_index = -1
@@ -201,7 +201,7 @@ class Runner:
                                         self.hparams.center_pixels, self.device,
                                         [Path(x) for x in sorted(self.hparams.chunk_paths)], self.hparams.num_chunks,
                                         self.hparams.train_scale_factor, self.hparams.disk_flush_size)
-            if self.hparams.ckpt_path is not None:
+            if self.hparams.ckpt_path is not None and self.hparams.resume_ckpt_state:
                 dataset.set_state(checkpoint['dataset_state'])
             if 'RANK' in os.environ and self.is_local_master:
                 dist.barrier()
