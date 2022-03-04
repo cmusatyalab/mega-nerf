@@ -30,6 +30,17 @@ def get_rays(directions: torch.Tensor, c2w: torch.Tensor, near: float, far: floa
     return _get_rays_inner(rays_o, rays_d, near, far, ray_altitude_range)
 
 
+def get_rays_batch(directions: torch.Tensor, c2w: torch.Tensor, near: float, far: float,
+                   ray_altitude_range: List[float]) -> torch.Tensor:
+    # Rotate ray directions from camera coordinate to the world coordinate
+    rays_d = directions @ c2w[:, :, :3].transpose(1, 2)  # (n, H*W, 3)
+    rays_d = rays_d / torch.norm(rays_d, dim=-1, keepdim=True)
+    # The origin of all rays is the camera origin in world coordinate
+    rays_o = c2w[:, :, 3].unsqueeze(1).expand(rays_d.shape)  # (n, H*W, 3)
+
+    return _get_rays_inner(rays_o, rays_d, near, far, ray_altitude_range)
+
+
 def _get_rays_inner(rays_o: torch.Tensor, rays_d: torch.Tensor, near: float, far: float,
                     ray_altitude_range: List[float]) -> torch.Tensor:
     # c2w is drb, ray_altitude_range is max_altitude (neg), min_altitude (neg)

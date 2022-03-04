@@ -99,9 +99,10 @@ class Runner:
             assert (torch.allclose(cluster_params['origin_drb'], self.origin_drb))
             assert cluster_params['pose_scale_factor'] == self.pose_scale_factor
 
-            if self.ray_altitude_range is not None:
-                assert (torch.allclose(torch.FloatTensor(cluster_params['ray_altitude_range']),
-                                       torch.FloatTensor(self.ray_altitude_range)))
+            # if self.ray_altitude_range is not None:
+            #     assert (torch.allclose(torch.FloatTensor(cluster_params['ray_altitude_range']),
+            #                            torch.FloatTensor(self.ray_altitude_range))), \
+            #         '{} {}'.format(self.ray_altitude_range, cluster_params['ray_altitude_range'])
 
         self.train_items, self.val_items = self._get_image_metadata()
         main_print('Using {} train images and {} val images'.format(len(self.train_items), len(self.val_items)))
@@ -133,7 +134,9 @@ class Runner:
                 if self.ray_altitude_range is not None:
                     ground_poses = camera_positions.clone()
                     ground_poses[:, 0] = self.ray_altitude_range[1]
-                    used_positions = torch.cat([camera_positions, ground_poses])
+                    air_poses = camera_positions.clone()
+                    air_poses[:, 0] = self.ray_altitude_range[0]
+                    used_positions = torch.cat([camera_positions, air_poses, ground_poses])
                 else:
                     used_positions = camera_positions
 
@@ -297,7 +300,7 @@ class Runner:
             self._save_checkpoint(optimizers, scaler, train_iterations, dataset_index,
                                   dataset.get_state() if self.hparams.dataset_type == 'filesystem' else None)
 
-        if self.hparams.cluster_mask_path is not None:
+        if self.hparams.cluster_mask_path is None:
             val_metrics = self._run_validation(train_iterations)
             self._write_final_metrics(val_metrics)
 
@@ -403,7 +406,7 @@ class Runner:
 
                 for i in main_tqdm(indices_to_eval):
                     metadata_item = self.val_items[i]
-                    viz_rgbs = metadata_item.load_image()
+                    viz_rgbs = metadata_item.load_image().float() / 255.
 
                     results, _ = self.render_image(metadata_item)
                     typ = 'fine' if 'rgb_fine' in results else 'coarse'
@@ -640,11 +643,21 @@ class Runner:
 
         metadata = torch.load(metadata_path, map_location='cpu')
         intrinsics = metadata['intrinsics'] / scale_factor
-        assert metadata['W'] % scale_factor == 0
-        assert metadata['H'] % scale_factor == 0
+        # assert metadata['W'] % scale_factor == 0
+        # assert metadata['H'] % scale_factor == 0
 
-        mask_path = Path(
-            self.hparams.cluster_mask_path) / metadata_path.name if self.hparams.cluster_mask_path is not None else None
+        dataset_mask = metadata_path.parent.parent.parent / 'masks' / metadata_path.name
+        if self.hparams.cluster_mask_path is not None:
+            if image_index == 0:
+                main_print('Using cluster mask path: {}'.format(self.hparams.cluster_mask_path))
+            mask_path = Path(self.hparams.cluster_mask_path) / metadata_path.name
+        elif dataset_mask.exists():
+            if image_index == 0:
+                main_print('Using dataset mask path: {}'.format(dataset_mask.parent))
+            mask_path = dataset_mask
+        else:
+            mask_path = None
+
         return ImageMetadata(image_path, metadata['c2w'], metadata['W'] // scale_factor, metadata['H'] // scale_factor,
                              intrinsics, image_index, None if (is_val and self.hparams.all_val) else mask_path, is_val)
 

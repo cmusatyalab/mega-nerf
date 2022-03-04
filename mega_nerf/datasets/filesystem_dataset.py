@@ -11,9 +11,12 @@ import torch
 from npy_append_array import NpyAppendArray
 from torch.utils.data import Dataset
 
-from mega_nerf.datasets.dataset_utils import get_image_data
+from mega_nerf.datasets.dataset_utils import get_rgb_index_mask
 from mega_nerf.image_metadata import ImageMetadata
 from mega_nerf.misc_utils import main_tqdm, main_print
+from mega_nerf.ray_utils import get_ray_directions, get_rays, get_rays_batch
+
+RAY_CHUNK_SIZE = 64 * 1024
 
 
 class FilesystemDataset(Dataset):
@@ -22,19 +25,50 @@ class FilesystemDataset(Dataset):
                  center_pixels: bool, device: torch.device, chunk_paths: List[Path], num_chunks: int,
                  scale_factor: int, disk_flush_size: int):
         super(FilesystemDataset, self).__init__()
+        self._device = device
+        self._c2ws = torch.cat([x.c2w.unsqueeze(0) for x in metadata_items])
+        self._near = near
+        self._far = far
+        self._ray_altitude_range = ray_altitude_range
 
-        append_arrays = self._check_existing_paths(chunk_paths, near, far, ray_altitude_range, center_pixels,
-                                                   scale_factor, len(metadata_items))
-        if append_arrays is not None:
-            main_print('Reusing {} chunks from previous run'.format(len(append_arrays)))
-            self._append_arrays = append_arrays
+        intrinsics = torch.cat(
+            [torch.cat([torch.FloatTensor([x.W, x.H]), x.intrinsics]).unsqueeze(0) for x in metadata_items])
+        if (intrinsics - intrinsics[0]).abs().max() == 0:
+            main_print(
+                'All intrinsics identical: W: {} H: {}, intrinsics: {}'.format(metadata_items[0].W, metadata_items[0].H,
+                                                                               metadata_items[0].intrinsics))
+
+            self._directions = get_ray_directions(metadata_items[0].W,
+                                                  metadata_items[0].H,
+                                                  metadata_items[0].intrinsics[0],
+                                                  metadata_items[0].intrinsics[1],
+                                                  metadata_items[0].intrinsics[2],
+                                                  metadata_items[0].intrinsics[3],
+                                                  center_pixels,
+                                                  torch.device('cpu')).view(-1, 3)
         else:
-            self._append_arrays = []
-            self._write_chunks(metadata_items, near, far, ray_altitude_range, center_pixels, device, chunk_paths,
-                               num_chunks, scale_factor, disk_flush_size)
+            main_print('Differing intrinsics')
+            self._directions = None
 
-        self._append_arrays.sort(key=lambda x: x.filename)
-        self._chunk_index = cycle(range(len(self._append_arrays)))
+        append_arrays = self._check_existing_paths(chunk_paths, center_pixels, scale_factor,
+                                                   len(metadata_items))
+        if append_arrays is not None:
+            main_print('Reusing {} chunks from previous run'.format(len(append_arrays[0])))
+            self._rgb_append_arrays = append_arrays[0]
+            self._ray_append_arrays = append_arrays[1]
+            self._img_append_arrays = append_arrays[2]
+        else:
+            self._rgb_append_arrays = []
+            self._ray_append_arrays = []
+            self._img_append_arrays = []
+            self._write_chunks(metadata_items, center_pixels, device, chunk_paths, num_chunks, scale_factor,
+                               disk_flush_size)
+
+        self._rgb_append_arrays.sort(key=lambda x: x.filename)
+        self._ray_append_arrays.sort(key=lambda x: x.filename)
+        self._img_append_arrays.sort(key=lambda x: x.filename)
+
+        self._chunk_index = cycle(range(len(self._rgb_append_arrays)))
         self._loaded_rgbs = None
         self._loaded_rays = None
         self._loaded_image_indices = None
@@ -43,11 +77,8 @@ class FilesystemDataset(Dataset):
         self._chosen = None
 
     def load_chunk(self) -> None:
-        chosen, loaded_chunk = self._chunk_future.result()
+        chosen, self._loaded_rgbs, self._loaded_rays, self._loaded_image_indices = self._chunk_future.result()
         self._chosen = chosen
-        self._loaded_rgbs = loaded_chunk[:, :3]
-        self._loaded_rays = loaded_chunk[:, 3:11]
-        self._loaded_image_indices = loaded_chunk[:, 11]
         self._chunk_future = self._chunk_load_executor.submit(self._load_chunk_inner)
 
     def get_state(self) -> str:
@@ -67,12 +98,38 @@ class FilesystemDataset(Dataset):
             'image_indices': self._loaded_image_indices[idx]
         }
 
-    def _load_chunk_inner(self) -> Tuple[str, torch.FloatTensor]:
-        chosen = self._append_arrays[next(self._chunk_index)]
-        return str(chosen.filename), torch.FloatTensor(np.load(chosen.filename))
+    def _load_chunk_inner(self) -> Tuple[str, torch.FloatTensor, torch.FloatTensor, torch.ShortTensor]:
+        next_index = next(self._chunk_index)
+        chosen = self._rgb_append_arrays[next_index]
+        loaded_img_indices = torch.ShortTensor(np.load(self._img_append_arrays[next_index].filename))
 
-    def _write_chunks(self, metadata_items: List[ImageMetadata], near: float, far: float,
-                      ray_altitude_range: List[float], center_pixels: bool, device: torch.device,
+        if self._directions is not None:
+            loaded_pixel_indices = torch.IntTensor(np.load(self._ray_append_arrays[next_index].filename))
+
+            loaded_rays = []
+            for i in range(0, loaded_pixel_indices.shape[0], RAY_CHUNK_SIZE):
+                image_indices = loaded_img_indices[i:i + RAY_CHUNK_SIZE]
+                unique_img_indices, inverse_img_indices = torch.unique(image_indices, return_inverse=True)
+                c2ws = self._c2ws[unique_img_indices.long()]
+
+                pixel_indices = loaded_pixel_indices[i:i + RAY_CHUNK_SIZE]
+                unique_pixel_indices, inverse_pixel_indices = torch.unique(pixel_indices, return_inverse=True)
+
+                # (#unique images, w*h, 8)
+                image_rays = get_rays_batch(self._directions[unique_pixel_indices.long()],
+                                            c2ws, self._near, self._far,
+                                            self._ray_altitude_range).cpu()
+
+                loaded_rays.append(image_rays[inverse_img_indices, inverse_pixel_indices])
+
+            loaded_rays = torch.cat(loaded_rays)
+        else:
+            loaded_rays = torch.FloatTensor(np.load(self._ray_append_arrays[next_index].filename))
+
+        return str(chosen.filename), torch.FloatTensor(np.load(chosen.filename)) / 255., \
+               loaded_rays, loaded_img_indices
+
+    def _write_chunks(self, metadata_items: List[ImageMetadata], center_pixels: bool, device: torch.device,
                       chunk_paths: List[Path], num_chunks: int, scale_factor: int, disk_flush_size: int) -> None:
         assert ('RANK' not in os.environ) or int(os.environ['LOCAL_RANK']) == 0
 
@@ -80,7 +137,10 @@ class FilesystemDataset(Dataset):
         total_free = 0
 
         for chunk_path in chunk_paths:
-            (chunk_path / 'chunks').mkdir(parents=True)
+            (chunk_path / 'rgb-chunks').mkdir(parents=True)
+            (chunk_path / 'ray-chunks').mkdir(parents=True)
+            (chunk_path / 'img-chunks').mkdir(parents=True)
+
             _, _, free = shutil.disk_usage(chunk_path)
             total_free += free
             path_frees.append(free)
@@ -90,7 +150,9 @@ class FilesystemDataset(Dataset):
             allocated = int(path_free / total_free * num_chunks)
             main_print('Allocating {} chunks to dataset path {}'.format(allocated, chunk_path))
             for j in range(allocated):
-                self._append_arrays.append(NpyAppendArray(str(chunk_path / 'chunks' / '{}.npy'.format(index))))
+                self._rgb_append_arrays.append(NpyAppendArray(str(chunk_path / 'rgb-chunks' / '{}.npy'.format(index))))
+                self._ray_append_arrays.append(NpyAppendArray(str(chunk_path / 'ray-chunks' / '{}.npy'.format(index))))
+                self._img_append_arrays.append(NpyAppendArray(str(chunk_path / 'img-chunks' / '{}.npy'.format(index))))
                 index += 1
         main_print('{} chunks allocated'.format(index))
 
@@ -99,19 +161,44 @@ class FilesystemDataset(Dataset):
         rays = []
         indices = []
         in_memory_count = 0
-        with ThreadPoolExecutor(max_workers=len(self._append_arrays)) as executor:
+
+        if self._directions is not None:
+            all_pixel_indices = torch.arange(self._directions.shape[0], dtype=torch.int)
+
+        with ThreadPoolExecutor(max_workers=len(self._rgb_append_arrays)) as executor:
             for metadata_item in main_tqdm(metadata_items):
-                image_data = get_image_data(metadata_item, near, far, ray_altitude_range, center_pixels, device)
+                image_data = get_rgb_index_mask(metadata_item)
 
                 if image_data is None:
                     continue
 
-                image_rgbs, image_rays, image_indices = image_data
-
+                image_rgbs, image_indices, image_keep_mask = image_data
                 rgbs.append(image_rgbs)
-                rays.append(image_rays)
                 indices.append(image_indices)
                 in_memory_count += len(image_rgbs)
+
+                if self._directions is not None:
+                    image_pixel_indices = all_pixel_indices
+                    if image_keep_mask is not None:
+                        image_pixel_indices = image_pixel_indices[image_keep_mask == True]
+
+                    rays.append(image_pixel_indices)
+                else:
+                    directions = get_ray_directions(metadata_item.W,
+                                                    metadata_item.H,
+                                                    metadata_item.intrinsics[0],
+                                                    metadata_item.intrinsics[1],
+                                                    metadata_item.intrinsics[2],
+                                                    metadata_item.intrinsics[3],
+                                                    center_pixels,
+                                                    device)
+                    image_rays = get_rays(directions, metadata_item.c2w.to(device), self._near, self._far,
+                                          self._ray_altitude_range).view(-1, 8).cpu()
+
+                    if image_keep_mask is not None:
+                        image_rays = image_rays[image_keep_mask == True]
+
+                    rays.append(image_rays)
 
                 if in_memory_count >= disk_flush_size:
                     for write_future in write_futures:
@@ -133,58 +220,75 @@ class FilesystemDataset(Dataset):
                 for write_future in write_futures:
                     write_future.result()
         for chunk_path in chunk_paths:
-            torch.save({
+            chunk_metadata = {
                 'images': len(metadata_items),
-                'scale_factor': scale_factor,
-                'near': near,
-                'far': far,
-                'center_pixels': center_pixels,
-                'ray_altitude_range': ray_altitude_range,
-            }, chunk_path / 'metadata.pt')
+                'scale_factor': scale_factor
+            }
+
+            if self._directions is None:
+                chunk_metadata['near'] = self._near
+                chunk_metadata['far'] = self._far
+                chunk_metadata['center_pixels'] = center_pixels
+                chunk_metadata['ray_altitude_range'] = self._ray_altitude_range
+
+            torch.save(chunk_metadata, chunk_path / 'metadata.pt')
+
+        for source in [self._rgb_append_arrays, self._ray_append_arrays, self._img_append_arrays]:
+            for append_array in source:
+                append_array.close()
 
         main_print('Finished writing chunks to dataset paths')
 
-    def _check_existing_paths(self, chunk_paths: List[Path], near: float, far: float, ray_altitude_range: List[float],
-                              center_pixels: bool, scale_factor: int, images: int) -> Optional[List[NpyAppendArray]]:
-        append_arrays = []
+    def _check_existing_paths(self, chunk_paths: List[Path], center_pixels: bool, scale_factor: int, images: int) -> \
+            Optional[Tuple[List[NpyAppendArray], List[NpyAppendArray], List[NpyAppendArray]]]:
+        rgb_append_arrays = []
+        ray_append_arrays = []
+        img_append_arrays = []
+
         num_exist = 0
         for chunk_path in chunk_paths:
             if chunk_path.exists():
                 dataset_metadata = torch.load(chunk_path / 'metadata.pt', map_location='cpu')
                 assert dataset_metadata['images'] == images
                 assert dataset_metadata['scale_factor'] == scale_factor
-                assert dataset_metadata['near'] == near
-                assert dataset_metadata['far'] == far
-                assert dataset_metadata['center_pixels'] == center_pixels
 
-                if ray_altitude_range is not None:
-                    assert (torch.allclose(torch.FloatTensor(dataset_metadata['ray_altitude_range']),
-                                           torch.FloatTensor(ray_altitude_range)))
-                else:
-                    assert dataset_metadata['ray_altitude_range'] is None
+                if self._directions is None:
+                    assert dataset_metadata['near'] == self._near
+                    assert dataset_metadata['far'] == self._far
+                    assert dataset_metadata['center_pixels'] == center_pixels
 
-                for child in list((chunk_path / 'chunks').iterdir()):
-                    append_arrays.append(NpyAppendArray(child))
+                    if self._ray_altitude_range is not None:
+                        assert (torch.allclose(torch.FloatTensor(dataset_metadata['ray_altitude_range']),
+                                               torch.FloatTensor(self._ray_altitude_range)))
+                    else:
+                        assert dataset_metadata['ray_altitude_range'] is None
+
+                for child in list((chunk_path / 'rgb-chunks').iterdir()):
+                    rgb_append_arrays.append(NpyAppendArray(child))
+                    ray_append_arrays.append(NpyAppendArray(child.parent.parent / 'ray-chunks' / child.name))
+                    img_append_arrays.append(NpyAppendArray(child.parent.parent / 'img-chunks' / child.name))
                 num_exist += 1
 
         if num_exist > 0:
             assert num_exist == len(chunk_paths)
-            return append_arrays
+            return rgb_append_arrays, ray_append_arrays, img_append_arrays
         else:
             return None
 
-    def _write_to_disk(self, executor: ThreadPoolExecutor, rgbs: torch.Tensor, rays: torch.Tensor,
+    def _write_to_disk(self, executor: ThreadPoolExecutor, rgbs: torch.Tensor,
+                       rays: torch.FloatTensor,
                        image_indices: torch.Tensor) -> List[Future[None]]:
-        to_store = torch.cat([rgbs, rays, image_indices.unsqueeze(-1)], -1)
-        indices = torch.randperm(to_store.shape[0])
-        num_chunks = len(self._append_arrays)
-        chunk_size = math.ceil(to_store.shape[0] / num_chunks)
+        indices = torch.randperm(rgbs.shape[0])
+        num_chunks = len(self._rgb_append_arrays)
+        chunk_size = math.ceil(rgbs.shape[0] / num_chunks)
 
         futures = []
 
         def append(index: int) -> None:
-            self._append_arrays[index].append(
-                to_store[indices[index * chunk_size:(index + 1) * chunk_size]].numpy())
+            self._rgb_append_arrays[index].append(rgbs[indices[index * chunk_size:(index + 1) * chunk_size]].numpy())
+            self._ray_append_arrays[index].append(rays[indices[index * chunk_size:(index + 1) * chunk_size]].numpy())
+            self._img_append_arrays[index].append(
+                image_indices[indices[index * chunk_size:(index + 1) * chunk_size]].numpy())
 
         for i in range(num_chunks):
             future = executor.submit(append, i)

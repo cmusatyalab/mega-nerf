@@ -19,9 +19,10 @@ from mega_nerf.runner import Runner
 def _get_render_opts() -> Namespace:
     parser = get_opts_base()
 
-    parser.add_argument('--dataset_path', type=str, required=True)
     parser.add_argument('--input', type=str, required=True)
     parser.add_argument('--output', type=str, required=True)
+    parser.add_argument('--dataset_path', type=str, required=True)
+    parser.add_argument('--centroids_path', type=str, required=True)
     parser.add_argument('--resume', default=False, action='store_true')
 
     return parser.parse_args()
@@ -32,7 +33,7 @@ def _render_images(hparams: Namespace) -> None:
     runner = Runner(hparams, False)
 
     input = Path(hparams.input)
-    centroids = torch.load(input / 'params.pt', map_location='cpu')['centroids']
+    centroids = torch.load(hparams.centroids_path, map_location='cpu')['centroids']
 
     c2ws = []
     poses_path = input / 'poses.txt'

@@ -37,7 +37,7 @@ def _get_nerf_inner(hparams: Namespace, appearance_count: int, layer_dim: int, x
         centroids = torch.load(hparams.train_mega_nerf, map_location='cpu')['centroids']
         nerf = MegaNeRF(
             [_get_single_nerf_inner(hparams, appearance_count, layer_dim, xyz_dim) for _ in
-             range(len(centroids))], centroids, hparams.boundary_margin, xyz_dim == 4, True)
+             range(len(centroids))], centroids, 1, xyz_dim == 4, True)
     else:
         nerf = _get_single_nerf_inner(hparams, appearance_count, layer_dim, xyz_dim)
 

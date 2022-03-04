@@ -20,6 +20,7 @@ def _get_mask_opts() -> Namespace:
     parser = get_opts_base()
 
     parser.add_argument('--dataset_path', type=str, required=True)
+    parser.add_argument('--segmentation_path', type=str, default=None)
     parser.add_argument('--output', type=str, required=True)
     parser.add_argument('--grid_dim', nargs='+', type=int, required=True)
     parser.add_argument('--ray_samples', type=int, default=1000)
@@ -118,8 +119,8 @@ def main(hparams: Namespace) -> None:
                 # Check to see if mask has been generated already
                 all_valid = True
                 filename = metadata_path.stem + '.pt'
-                for i in range(centroids.shape[0]):
-                    mask_path = output_path / str(i) / filename
+                for j in range(centroids.shape[0]):
+                    mask_path = output_path / str(j) / filename
                     if not mask_path.exists():
                         all_valid = False
                         break
@@ -167,8 +168,8 @@ def main(hparams: Namespace) -> None:
 
                 min_distances = []
                 cluster_distances = []
-                for i in range(0, xyz.shape[0], hparams.dist_chunk_size):
-                    distances = torch.cdist(xyz[i:i + hparams.dist_chunk_size], centroids)
+                for k in range(0, xyz.shape[0], hparams.dist_chunk_size):
+                    distances = torch.cdist(xyz[k:k + hparams.dist_chunk_size], centroids)
                     cluster_distances.append(distances)
                     min_distances.append(distances.min(dim=1)[0])
 
@@ -185,14 +186,25 @@ def main(hparams: Namespace) -> None:
 
             min_dist_ratios = torch.cat(min_dist_ratios).view(metadata['H'], metadata['W'], centroids.shape[0])
 
-            for i in range(centroids.shape[0]):
-                cluster_ratios = min_dist_ratios[:, :, i]
+            filename = (metadata_path.stem + '.pt')
+
+            if hparams.segmentation_path is not None:
+                with ZipFile(Path(hparams.segmentation_path) / filename) as zf:
+                    with zf.open(filename) as zf2:
+                        segmentation_mask = torch.load(zf2, map_location='cpu')
+
+            for j in range(centroids.shape[0]):
+                cluster_ratios = min_dist_ratios[:, :, j]
                 ray_in_cluster = cluster_ratios <= hparams.boundary_margin
 
-                filename = (metadata_path.stem + '.pt')
-                with ZipFile(output_path / str(i) / filename, compression=zipfile.ZIP_DEFLATED, mode='w') as zf:
+                with ZipFile(output_path / str(j) / filename, compression=zipfile.ZIP_DEFLATED, mode='w') as zf:
                     with zf.open(filename, 'w') as f:
-                        torch.save(ray_in_cluster.cpu(), f)
+                        cluster_mask = ray_in_cluster.cpu()
+
+                        if hparams.segmentation_path is not None:
+                            cluster_mask = torch.logical_and(cluster_mask, segmentation_mask)
+
+                        torch.save(cluster_mask, f)
 
                 del ray_in_cluster
 

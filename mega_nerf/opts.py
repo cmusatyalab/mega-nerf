@@ -8,7 +8,7 @@ def get_opts_base():
     parser.add_argument('--dataset_type', type=str, default='filesystem', choices=['filesystem', 'memory'])
     parser.add_argument('--chunk_paths', type=str, nargs='+', default=None)
     parser.add_argument('--num_chunks', type=int, default=200)
-    parser.add_argument('--disk_flush_size', type=int, default=5000000)
+    parser.add_argument('--disk_flush_size', type=int, default=10000000)
     parser.add_argument('--train_every', type=int, default=1)
 
     parser.add_argument('--cluster_mask_path', type=str, default=None)
@@ -62,7 +62,7 @@ def get_opts_base():
     parser.add_argument('--no_ellipse_bounds', dest='ellipse_bounds', default=True, action='store_false')
 
     parser.add_argument('--train_iterations', type=int, default=500000)
-    parser.add_argument('--val_interval', type=int, default=500000)
+    parser.add_argument('--val_interval', type=int, default=500001)
     parser.add_argument('--ckpt_interval', type=int, default=10000)
 
     parser.add_argument('--no_resume_ckpt_state', dest='resume_ckpt_state', default=True, action='store_false')
