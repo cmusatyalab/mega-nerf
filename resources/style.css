@@ -45,6 +45,14 @@ body {
     width: 100%;
 }
 
+.overview-table {
+    width: 90%;
+}
+
+.overview-table td {
+    font-size: 1.25em;
+}
+
 .network {
     width: 65%;
     margin-bottom: 2%;
