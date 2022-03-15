@@ -99,10 +99,10 @@ class Runner:
             assert (torch.allclose(cluster_params['origin_drb'], self.origin_drb))
             assert cluster_params['pose_scale_factor'] == self.pose_scale_factor
 
-            # if self.ray_altitude_range is not None:
-            #     assert (torch.allclose(torch.FloatTensor(cluster_params['ray_altitude_range']),
-            #                            torch.FloatTensor(self.ray_altitude_range))), \
-            #         '{} {}'.format(self.ray_altitude_range, cluster_params['ray_altitude_range'])
+            if self.ray_altitude_range is not None:
+                assert (torch.allclose(torch.FloatTensor(cluster_params['ray_altitude_range']),
+                                       torch.FloatTensor(self.ray_altitude_range))), \
+                    '{} {}'.format(self.ray_altitude_range, cluster_params['ray_altitude_range'])
 
         self.train_items, self.val_items = self._get_image_metadata()
         main_print('Using {} train images and {} val images'.format(len(self.train_items), len(self.val_items)))
