@@ -36,22 +36,22 @@ The codebase has been mainly tested against CUDA >= 11.1 and V100/2080 Ti/3090 T
 
 ### Mill 19
 
-- The Building scene can be downloaded [here](https://storage.cmusatyalab.org/mega-nerf-data/building.tgz).
-- The Rubble scene can be downloaded [here](https://storage.cmusatyalab.org/mega-nerf-data/rubble.tgz).
+- The Building scene can be downloaded [here](https://storage.cmusatyalab.org/mega-nerf-data/building-pixsfm.tgz).
+- The Rubble scene can be downloaded [here](https://storage.cmusatyalab.org/mega-nerf-data/rubble-pixsfm.tgz).
 
 ### UrbanScene 3D
 
 1. Download the raw photo collections from the [UrbanScene3D](https://vcc.tech/UrbanScene3D/) dataset
 2. Download the refined camera poses for one of the scenes below:
-  - [Residence](https://storage.cmusatyalab.org/mega-nerf-data/residence.tgz)
-  - [Sci-Art](https://storage.cmusatyalab.org/mega-nerf-data/sci-art.tgz)
-  - [Campus](https://storage.cmusatyalab.org/mega-nerf-data/campus.tgz)
+  - [Residence](https://storage.cmusatyalab.org/mega-nerf-data/residence-pixsfm.tgz)
+  - [Sci-Art](https://storage.cmusatyalab.org/mega-nerf-data/sci-art-pixsfm.tgz)
+  - [Campus](https://storage.cmusatyalab.org/mega-nerf-data/campus-pixsfm.tgz)
 4. Run ```python scripts/copy_images.py --image_path $RAW_PHOTO_PATH --dataset_path $CAMERA_POSE_PATH```
 
 ### Quad 6k Dataset
 
 1. Download the raw photo collections from [here](http://vision.soic.indiana.edu/disco_files/ArtsQuad_dataset.tar).
-2. Download [the refined camera poses](https://storage.cmusatyalab.org/mega-nerf-data/quad.tgz)
+2. Download [the refined camera poses](https://storage.cmusatyalab.org/mega-nerf-data/quad-pixsfm.tgz)
 3. Run ```python scripts/copy_images.py --image_path $RAW_PHOTO_PATH --dataset_path $CAMERA_POSE_PATH```
 
 ### Custom Data
