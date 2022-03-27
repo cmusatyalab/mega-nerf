@@ -14,7 +14,9 @@
     <meta property="og:image" content="resources/network-overview.jpg"/>
     <meta property="og:title" content="Mega-NeRF: Scalable Construction of Large-Scale NeRFs for Virtual Fly-Throughs"/>
     <meta property="og:description"
-          content="We explore how to leverage neural radiance fields (NeRFs) to build interactive 3D environments from large-scale visual captures spanning buildings or even multiple city blocks collected primarily from drone data.  In contrast to the single object scenes against which NeRFs have been traditionally evaluated, this setting poses multiple challenges including (1) the need to incorporate thousands of images with varying lighting conditions, all of which capture only a small subset of the scene, (2) prohibitively high model capacity and ray sampling requirements beyond what can be naively trained on a single GPU, and (3) an arbitrarily large number of possible viewpoints that make it unfeasible to precompute all relevant information beforehand (as real-time NeRF renderers typically do). To address these challenges, we begin by analyzing visibility statistics for large-scale scenes, motivating a sparse network structure where parameters are specialized to different regions of the scene. We introduce a simple geometric clustering algorithm that partitions training images (or rather pixels) into different NeRF submodules that can be trained in parallel. We evaluate our approach across scenes taken from the Quad 6k and UrbanScene3D datasets as well as against our own drone footage and show a 3x training speedup while improving PSNR by over 11% on average. We subsequently perform an empirical evaluation of recent NeRF fast renderers on top of Mega-NeRF and introduce a novel method that exploits temporal coherence. Our technique achieves a 40x speedup over conventional NeRF rendering while remaining within 0.5 db in PSNR quality, exceeding the fidelity of existing fast renderers."/>
+          content="We use neural radiance fields (NeRFs) to build interactive 3D environments from large-scale visual captures spanning buildings or even multiple city blocks collected primarily from drones. In contrast to single object scenes (on which NeRFs are traditionally evaluated), our scale poses multiple challenges including (1) the need to model thousands of images with varying lighting conditions, each of which capture only a small subset of the scene, (2) prohibitively large model capacities that make it infeasible to train on a single GPU, and (3) significant challenges for fast rendering that would enable interactive fly-throughs.
+To address these challenges, we begin by analyzing visibility statistics for large-scale scenes, motivating a sparse network structure where parameters are specialized to different regions of the scene. We introduce a simple geometric clustering algorithm for data parallelism that partitions training images (or rather pixels) into different NeRF submodules that can be trained in parallel. 
+We evaluate our approach on existing datasets (Quad 6k and UrbanScene3D) as well as against our own drone footage, improving training speed by 3x and PSNR by 12%. We also evaluate recent NeRF fast renderers on top of Mega-NeRF and introduce a novel method that exploits temporal coherence. Our technique achieves a 40x speedup over conventional NeRF rendering while remaining within 0.8 db in PSNR quality, exceeding the fidelity of existing fast renderers."/>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-ZPKPHHVG2P"></script>
@@ -57,7 +59,7 @@
 <body>
 <div class="container">
     <div class="title">
-        Mega-NeRF: Scalable Construction of Large-Scale NeRFs for Virtual Fly-Throughs
+        Mega-NeRF:<br/>Scalable Construction of Large-Scale NeRFs for Virtual Fly-Throughs
     </div>
 
     <div class="sub-title">
@@ -103,14 +105,14 @@
                     <td>
                         <img src="resources/data-partitioning.svg" class="data-image">
                         <br/>
-                        Data Partitioning
+                        Training: Data Partitioning
                     </td>
                 </tr>
                 <tr>
                     <td>
                         <img src="resources/view-synthesis.svg" class="data-image">
                         <br/>
-                        View Synthesis
+                        Inference: View Synthesis
                     </td>
                 </tr>
                 </tbody>
@@ -146,24 +148,11 @@
 
     <h1>Abstract</h1>
     <p>
-        We explore how to leverage neural radiance fields (NeRFs) to build interactive 3D environments from large-scale
-        visual captures spanning buildings or even multiple city blocks collected primarily from drone data. In contrast
-        to the single object scenes against which NeRFs have been traditionally evaluated, this setting poses multiple
-        challenges including (1) the need to incorporate thousands of images with varying lighting conditions, all of
-        which capture only a small subset of the scene, (2) prohibitively high model capacity and ray sampling
-        requirements beyond what can be naively trained on a single GPU, and (3) an arbitrarily large number of possible
-        viewpoints that make it unfeasible to precompute all relevant information beforehand (as real-time NeRF
-        renderers typically do).<br/>
+We use neural radiance fields (NeRFs) to build interactive 3D environments from large-scale visual captures spanning buildings or even multiple city blocks collected primarily from drones. In contrast to single object scenes (on which NeRFs are traditionally evaluated), our scale poses multiple challenges including (1) the need to model thousands of images with varying lighting conditions, each of which capture only a small subset of the scene, (2) prohibitively large model capacities that make it infeasible to train on a single GPU, and (3) significant challenges for fast rendering that would enable interactive fly-throughs.<br/>
 
-        To address these challenges, we begin by analyzing visibility statistics for large-scale scenes, motivating a
-        sparse network structure where parameters are specialized to different regions of the scene. We introduce a
-        simple geometric clustering algorithm that partitions training images (or rather pixels) into different NeRF
-        submodules that can be trained in parallel. We evaluate our approach across scenes taken from the Quad 6k and
-        UrbanScene3D datasets as well as against our own drone footage and show a 3x training speedup while improving
-        PSNR by over 11% on average. We subsequently perform an empirical evaluation of recent NeRF fast renderers on
-        top of Mega-NeRF and introduce a novel method that exploits temporal coherence. Our technique achieves a 40x
-        speedup over conventional NeRF rendering while remaining within 0.5 db in PSNR quality, exceeding the fidelity
-        of existing fast renderers.
+To address these challenges, we begin by analyzing visibility statistics for large-scale scenes, motivating a sparse network structure where parameters are specialized to different regions of the scene. We introduce a simple geometric clustering algorithm for data parallelism that partitions training images (or rather pixels) into different NeRF submodules that can be trained in parallel.<br/>
+
+We evaluate our approach on existing datasets (Quad 6k and UrbanScene3D) as well as against our own drone footage, improving training speed by 3x and PSNR by 12%. We also evaluate recent NeRF fast renderers on top of Mega-NeRF and introduce a novel method that exploits temporal coherence. Our technique achieves a 40x speedup over conventional NeRF rendering while remaining within 0.8 db in PSNR quality, exceeding the fidelity of existing fast renderers.
     </p>
 
     <br><br>
