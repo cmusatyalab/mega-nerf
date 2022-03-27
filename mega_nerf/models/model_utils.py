@@ -23,10 +23,10 @@ def _get_nerf_inner(hparams: Namespace, appearance_count: int, layer_dim: int, x
         container = torch.jit.load(hparams.container_path, map_location='cpu')
         if xyz_dim == 3:
             return MegaNeRF([getattr(container, 'sub_module_{}'.format(i)) for i in range(len(container.centroids))],
-                            container.centroids, hparams.boundary_margin, False)
+                            container.centroids, hparams.boundary_margin, False, container.cluster_2d)
         else:
             return MegaNeRF([getattr(container, 'bg_sub_module_{}'.format(i)) for i in range(len(container.centroids))],
-                            container.centroids, hparams.boundary_margin, True)
+                            container.centroids, hparams.boundary_margin, True, container.cluster_2d)
     elif hparams.use_cascade:
         nerf = Cascade(
             _get_single_nerf_inner(hparams, appearance_count,
@@ -34,10 +34,11 @@ def _get_nerf_inner(hparams: Namespace, appearance_count: int, layer_dim: int, x
                                    xyz_dim),
             _get_single_nerf_inner(hparams, appearance_count, layer_dim, xyz_dim))
     elif hparams.train_mega_nerf is not None:
-        centroids = torch.load(hparams.train_mega_nerf, map_location='cpu')['centroids']
+        centroid_metadata = torch.load(hparams.train_mega_nerf, map_location='cpu')
+        centroids = centroid_metadata['centroids']
         nerf = MegaNeRF(
             [_get_single_nerf_inner(hparams, appearance_count, layer_dim, xyz_dim) for _ in
-             range(len(centroids))], centroids, 1, xyz_dim == 4, True)
+             range(len(centroids))], centroids, 1, xyz_dim == 4, centroid_metadata['cluster_2d'], True)
     else:
         nerf = _get_single_nerf_inner(hparams, appearance_count, layer_dim, xyz_dim)
 

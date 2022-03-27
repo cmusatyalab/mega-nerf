@@ -41,6 +41,7 @@ def get_opts_base():
     parser.add_argument('--train_mega_nerf', type=str, default=None)
     parser.add_argument('--boundary_margin', type=float, default=1.15)
     parser.add_argument('--all_val', default=False, action='store_true')
+    parser.add_argument('--cluster_2d', default=False, action='store_true')
 
     parser.add_argument('--sh_deg', type=int, default=None)
 
@@ -59,6 +60,8 @@ def get_opts_base():
     parser.add_argument('--lr_decay_factor', type=float, default=0.1)
 
     parser.add_argument('--no_bg_nerf', dest='bg_nerf', default=True, action='store_false')
+
+    parser.add_argument('--ellipse_scale_factor', type=float, default=1.1)
     parser.add_argument('--no_ellipse_bounds', dest='ellipse_bounds', default=True, action='store_false')
 
     parser.add_argument('--train_iterations', type=int, default=500000)

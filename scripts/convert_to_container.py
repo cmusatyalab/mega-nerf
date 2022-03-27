@@ -48,13 +48,14 @@ def main(hparams: Namespace) -> None:
                                   torch.zeros(3),
                                   torch.ones(3),
                                   hparams.pos_dir_dim > 0,
-                                  hparams.appearance_dim > 0)
+                                  hparams.appearance_dim > 0,
+                                  False)
     torch.jit.save(torch.jit.script(container.eval()), hparams.output)
     container = torch.jit.load(hparams.output, map_location='cpu')
 
     # Test container
     nerf = MegaNeRF([getattr(container, 'sub_module_{}'.format(i)) for i in range(len(container.centroids))],
-                    container.centroids, hparams.boundary_margin, False).to(device)
+                    container.centroids, hparams.boundary_margin, False, container.cluster_2d).to(device)
 
     width = 3
     if hparams.pos_dir_dim > 0:
@@ -66,7 +67,7 @@ def main(hparams: Namespace) -> None:
 
     if 'bg_model_state_dict' in loaded:
         bg_nerf = MegaNeRF([getattr(container, 'bg_sub_module_{}'.format(i)) for i in range(len(container.centroids))],
-                           container.centroids, hparams.boundary_margin, True).to(device)
+                           container.centroids, hparams.boundary_margin, True, container.cluster_2d).to(device)
 
         width += 4
         print('bg test eval: {}'.format(bg_nerf(torch.ones(1, width, device=device))))

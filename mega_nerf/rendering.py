@@ -50,8 +50,10 @@ def render_rays(nerf: nn.Module,
                                                    rays_with_bg.shape[0])
 
             include_xyz_real = hparams.container_path is not None or hparams.train_mega_nerf is not None
+            cluster_2d = include_xyz_real and nerf.cluster_dim_start == 1
             bg_pts, depth_real = _depth2pts_outside(rays_o[rays_with_bg], rays_d[rays_with_bg], bg_z_vals,
-                                                    sphere_center, sphere_radius, include_xyz_real)
+                                                    sphere_center, sphere_radius, include_xyz_real,
+                                                    cluster_2d)
 
             bg_results = _get_results(nerf=bg_nerf,
                                       rays_d=rays_d[rays_with_bg],
@@ -69,7 +71,8 @@ def render_rays(nerf: nn.Module,
                                                                                          rays_d[rays_with_bg],
                                                                                          fine_z_vals,
                                                                                          sphere_center, sphere_radius,
-                                                                                         include_xyz_real))
+                                                                                         include_xyz_real,
+                                                                                         cluster_2d))
 
     else:
         rays_o = rays_o.view(rays_o.shape[0], 1, rays_o.shape[1])
@@ -142,8 +145,10 @@ def render_rays(nerf: nn.Module,
         bg_z_vals = _expand_and_perturb_z_vals(bg_z_vals, hparams.coarse_samples // 2, perturb, 1)
 
         include_xyz_real = hparams.train_mega_nerf is not None
+        cluster_2d = include_xyz_real and nerf.cluster_dim_start == 1
+
         bg_pts, depth_real = _depth2pts_outside(rays_o[:1], rays_d[:1], bg_z_vals,
-                                                sphere_center, sphere_radius, include_xyz_real)
+                                                sphere_center, sphere_radius, include_xyz_real, cluster_2d)
         grad_results = _get_results(nerf=bg_nerf,
                                     rays_d=rays_d[:1],
                                     image_indices=image_indices[:1] if image_indices is not None else None,
@@ -160,7 +165,8 @@ def render_rays(nerf: nn.Module,
                                                                                        rays_d[:1],
                                                                                        fine_z_vals,
                                                                                        sphere_center, sphere_radius,
-                                                                                       include_xyz_real))
+                                                                                       include_xyz_real,
+                                                                                       cluster_2d))
         results[f'rgb_{types[0]}'][:0] += 0 * grad_results[f'rgb_{types[0]}']
         bg_nerf_rays_present = True
 
@@ -412,7 +418,7 @@ def _intersect_sphere(rays_o: torch.Tensor, rays_d: torch.Tensor, sphere_center:
 
 
 def _depth2pts_outside(rays_o: torch.Tensor, rays_d: torch.Tensor, depth: torch.Tensor, sphere_center: torch.Tensor,
-                       sphere_radius: torch.Tensor, include_xyz_real: bool):
+                       sphere_radius: torch.Tensor, include_xyz_real: bool, cluster_2d: bool):
     '''
     rays_o, rays_d: [..., 3]
     depth: [...]; inverse of distance to sphere origin
@@ -449,11 +455,14 @@ def _depth2pts_outside(rays_o: torch.Tensor, rays_d: torch.Tensor, depth: torch.
     depth_real = 1. / (depth + 1e-8) * torch.cos(theta) + d1
 
     if include_xyz_real:
-        boundary = rays_o_orig + rays_d_orig * (d1 + d2).unsqueeze(-1)
-        pts = torch.cat((boundary.repeat(1, p_sphere_new.shape[1], 1), p_sphere_new, depth.unsqueeze(-1)), dim=-1)
-        # pts = torch.cat(
-        #     (rays_o_orig + rays_d_orig * depth_real.unsqueeze(-1), p_sphere_new, depth.unsqueeze(-1)),
-        #     dim=-1)
+        if cluster_2d:
+            pts = torch.cat(
+                (rays_o_orig + rays_d_orig * depth_real.unsqueeze(-1), p_sphere_new, depth.unsqueeze(-1)),
+                dim=-1)
+        else:
+            boundary = rays_o_orig + rays_d_orig * (d1 + d2).unsqueeze(-1)
+            pts = torch.cat((boundary.repeat(1, p_sphere_new.shape[1], 1), p_sphere_new, depth.unsqueeze(-1)), dim=-1)
+
     else:
         pts = torch.cat((p_sphere_new, depth.unsqueeze(-1)), dim=-1)
 

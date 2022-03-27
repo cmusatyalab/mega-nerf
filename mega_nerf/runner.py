@@ -149,7 +149,7 @@ class Runner:
                 scale_factor = ((used_positions.to(self.device) - self.sphere_center) / self.sphere_radius).norm(
                     dim=-1).max()
 
-                self.sphere_radius *= (scale_factor * 1.1)
+                self.sphere_radius *= (scale_factor * hparams.ellipse_scale_factor)
             else:
                 self.sphere_center = None
                 self.sphere_radius = None
@@ -643,8 +643,8 @@ class Runner:
 
         metadata = torch.load(metadata_path, map_location='cpu')
         intrinsics = metadata['intrinsics'] / scale_factor
-        # assert metadata['W'] % scale_factor == 0
-        # assert metadata['H'] % scale_factor == 0
+        assert metadata['W'] % scale_factor == 0
+        assert metadata['H'] % scale_factor == 0
 
         dataset_mask = metadata_path.parent.parent.parent / 'masks' / metadata_path.name
         if self.hparams.cluster_mask_path is not None:

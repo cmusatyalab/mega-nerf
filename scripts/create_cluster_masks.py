@@ -53,7 +53,7 @@ def main(hparams: Namespace) -> None:
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     dataset_path = Path(hparams.dataset_path)
-    coordinate_info = torch.load(dataset_path / 'coordinates.pt')
+    coordinate_info = torch.load(dataset_path / 'coordinates.pt', map_location='cpu')
     origin_drb = coordinate_info['origin_drb']
     pose_scale_factor = coordinate_info['pose_scale_factor']
 
@@ -97,7 +97,8 @@ def main(hparams: Namespace) -> None:
         'centroids': centroids,
         'grid_dim': (hparams.grid_dim),
         'min_position': min_position,
-        'max_position': max_position
+        'max_position': max_position,
+        'cluster_2d': hparams.cluster_2d
     }, output_path / 'params.pt')
 
     z_steps = torch.linspace(0, 1, hparams.ray_samples, device=device)  # (N_samples)
@@ -110,6 +111,7 @@ def main(hparams: Namespace) -> None:
     if 'RANK' in os.environ:
         dist.barrier()
 
+    cluster_dim_start = 1 if hparams.cluster_2d else 0
     for subdir in ['train', 'val']:
         metadata_paths = list((dataset_path / subdir / 'metadata').iterdir())
         for i in main_tqdm(np.arange(rank, len(metadata_paths), world_size)):
@@ -169,7 +171,8 @@ def main(hparams: Namespace) -> None:
                 min_distances = []
                 cluster_distances = []
                 for k in range(0, xyz.shape[0], hparams.dist_chunk_size):
-                    distances = torch.cdist(xyz[k:k + hparams.dist_chunk_size], centroids)
+                    distances = torch.cdist(xyz[k:k + hparams.dist_chunk_size, cluster_dim_start:],
+                                            centroids[:, cluster_dim_start:])
                     cluster_distances.append(distances)
                     min_distances.append(distances.min(dim=1)[0])
 

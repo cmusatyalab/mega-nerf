@@ -221,7 +221,7 @@ def main(hparams: Namespace) -> None:
 
     metadata_paths = train_paths + list((dataset_path / 'val' / 'metadata').iterdir())
 
-    poses = torch.cat([torch.load(x)['c2w'].unsqueeze(0) for x in metadata_paths])
+    poses = torch.cat([torch.load(x, map_location='cpu')['c2w'].unsqueeze(0) for x in metadata_paths])
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     nerf = get_nerf(hparams, poses.shape[0]).to(device).eval()

@@ -6,26 +6,28 @@ from torch import nn
 
 class MegaNeRF(nn.Module):
     def __init__(self, sub_modules: List[nn.Module], centroids: torch.Tensor, boundary_margin: float, xyz_real: bool,
-                 joint_training: bool = False):
+                 cluster_2d: bool, joint_training: bool = False):
         super(MegaNeRF, self).__init__()
         assert boundary_margin >= 1
         self.sub_modules = nn.ModuleList(sub_modules)
         self.register_buffer('centroids', centroids)
         self.boundary_margin = boundary_margin
         self.xyz_real = xyz_real
+        self.cluster_dim_start = 1 if cluster_2d else 0
         self.joint_training = joint_training
 
     def forward(self, x: torch.Tensor, sigma_only: bool = False,
                 sigma_noise: Optional[torch.Tensor] = None) -> torch.Tensor:
         if self.boundary_margin > 1:
-            cluster_distances = torch.cdist(x[:, :3], self.centroids)
+            cluster_distances = torch.cdist(x[:, self.cluster_dim_start:3], self.centroids[:, self.cluster_dim_start:])
             inverse_cluster_distances = 1 / (cluster_distances + 1e-8)
 
             min_cluster_distances = cluster_distances.min(dim=1)[0].unsqueeze(-1).repeat(1, cluster_distances.shape[1])
             inverse_cluster_distances[cluster_distances > self.boundary_margin * min_cluster_distances] = 0
             weights = inverse_cluster_distances / inverse_cluster_distances.sum(dim=-1).unsqueeze(-1)
         else:
-            cluster_assignments = torch.cdist(x[:, :3], self.centroids).argmin(dim=1)
+            cluster_assignments = torch.cdist(x[:, self.cluster_dim_start:3],
+                                              self.centroids[:, self.cluster_dim_start:]).argmin(dim=1)
 
         results = torch.empty(0)
 
