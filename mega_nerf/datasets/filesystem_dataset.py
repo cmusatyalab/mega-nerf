@@ -267,6 +267,8 @@ class FilesystemDataset(Dataset):
         num_exist = 0
         for chunk_path in chunk_paths:
             if chunk_path.exists():
+                assert (chunk_path / 'metadata.pt').exists(), \
+                    "Could not find metadata file (did previous writing to this directory not complete successfully?)"
                 dataset_metadata = torch.load(chunk_path / 'metadata.pt', map_location='cpu')
                 assert dataset_metadata['images'] == images
                 assert dataset_metadata['scale_factor'] == scale_factor
@@ -294,8 +296,8 @@ class FilesystemDataset(Dataset):
         else:
             return None
 
-    def _write_to_disk(self, executor: ThreadPoolExecutor, rgbs: torch.Tensor,
-                       rays: torch.FloatTensor,
+    @staticmethod
+    def _write_to_disk(executor: ThreadPoolExecutor, rgbs: torch.Tensor, rays: torch.FloatTensor,
                        image_indices: torch.Tensor, rgb_append_arrays, ray_append_arrays, img_append_arrays) -> List[
         Future[None]]:
         indices = torch.randperm(rgbs.shape[0])

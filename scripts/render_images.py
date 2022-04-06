@@ -23,6 +23,7 @@ def _get_render_opts() -> Namespace:
     parser.add_argument('--output', type=str, required=True)
     parser.add_argument('--dataset_path', type=str, required=True)
     parser.add_argument('--centroids_path', type=str, required=True)
+    parser.add_argument('--save_depth_npz', default=False, action='store_true')
     parser.add_argument('--resume', default=False, action='store_true')
 
     return parser.parse_args()
@@ -60,6 +61,8 @@ def _render_images(hparams: Namespace) -> None:
         (output / 'rgbs').mkdir(parents=True, exist_ok=hparams.resume)
         (output / 'depths').mkdir(parents=True, exist_ok=hparams.resume)
         (output / 'cells').mkdir(parents=True, exist_ok=hparams.resume)
+        if hparams.save_depth_npz:
+            (output / 'depths_npz').mkdir(parents=True, exist_ok=hparams.resume)
 
     if 'RANK' in os.environ:
         dist.barrier()
@@ -70,6 +73,9 @@ def _render_images(hparams: Namespace) -> None:
     runner.nerf.eval()
     if runner.bg_nerf is not None:
         runner.bg_nerf.eval()
+
+    coordinate_info = torch.load(Path(hparams.dataset_path) / 'coordinates.pt', map_location='cpu')
+    pose_scale_factor = coordinate_info['pose_scale_factor']
 
     for i in tqdm(np.arange(rank, len(c2ws), world_size)):
         cell_path = output / 'cells' / '{0:06d}.jpg'.format(i)
@@ -97,6 +103,10 @@ def _render_images(hparams: Namespace) -> None:
         img.save(output / 'rgbs' / '{0:06d}.jpg'.format(i))
 
         depth = results[f'depth_{typ}'].view(H, W).cpu()
+
+        if hparams.save_depth_npz:
+            np.save(str(output / 'depths_npz' / '{0:06d}.npy'.format(i)), (depth * pose_scale_factor).numpy())
+
         if f'bg_depth_{typ}' in results:
             to_use = results[f'fg_depth_{typ}'].view(-1)
             while to_use.shape[0] > 2 ** 24:

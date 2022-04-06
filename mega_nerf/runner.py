@@ -309,13 +309,11 @@ class Runner:
         val_metrics = self._run_validation(0)
         self._write_final_metrics(val_metrics)
 
-    def _write_final_metrics(self, val_metrics):
+    def _write_final_metrics(self, val_metrics: Dict[str, float]) -> None:
         if self.is_master:
             with (self.experiment_path / 'metrics.txt').open('w') as f:
                 for key in val_metrics:
                     avg_val = val_metrics[key] / len(self.val_items)
-                    avg_metric_key = '{}/avg'.format(key)
-                    self.writer.add_scalar(avg_metric_key, avg_val, 0)
                     message = 'Average {}: {}'.format(key, avg_val)
                     main_print(message)
                     f.write('{}\n'.format(message))
@@ -504,6 +502,11 @@ class Runner:
                         for image_file in image_path.iterdir():
                             img = Image.open(str(image_file))
                             self.writer.add_image('val/{}'.format(image_file.stem), T.ToTensor()(img), train_index)
+
+                        for key in val_metrics:
+                            avg_val = val_metrics[key] / len(self.val_items)
+                            self.writer.add_scalar('{}/avg'.format(key), avg_val, 0)
+
                     dist.barrier()
 
                 self.nerf.train()
