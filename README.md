@@ -32,6 +32,24 @@ conda activate mega-nerf
 
 The codebase has been mainly tested against CUDA >= 11.1 and V100/2080 Ti/3090 Ti GPUs. 1080 Ti GPUs should work as well although training will be much slower.
 
+## Pretrained Models
+
+### Trained with 8 submodules (to compare with main paper)
+
+- Rubble: [model](https://storage.cmusatyalab.org/mega-nerf-data/rubble-pixsfm-8.pt) [cluster masks](https://storage.cmusatyalab.org/mega-nerf-data/rubble-pixsfm-grid-8.tgz)
+- Building: [model](https://storage.cmusatyalab.org/mega-nerf-data/building-pixsfm-8.pt) [cluster masks](https://storage.cmusatyalab.org/mega-nerf-data/building-pixsfm-grid-8.tgz)
+- Quad: [model](https://storage.cmusatyalab.org/mega-nerf-data/quad-pixsfm-8.pt) [cluster masks](https://storage.cmusatyalab.org/mega-nerf-data/quad-pixsfm-grid-8.tgz)
+- Residence: [model](https://storage.cmusatyalab.org/mega-nerf-data/residence-pixsfm-8.pt) [cluster masks](https://storage.cmusatyalab.org/mega-nerf-data/residence-pixsfm-grid-8.tgz)
+- Sci-Art: [model](https://storage.cmusatyalab.org/mega-nerf-data/sci-art-pixsfm-8.pt) [cluster masks](https://storage.cmusatyalab.org/mega-nerf-data/sci-art-pixsfm-grid-8.tgz)
+- Campus: [model](https://storage.cmusatyalab.org/mega-nerf-data/campus-pixsfm-8.pt) [cluster masks](https://storage.cmusatyalab.org/mega-nerf-data/campus-pixsfm-grid-8.tgz)
+
+### Larger models (trained with 25 submodules with 512 channels each)
+
+- Rubble: [model](https://storage.cmusatyalab.org/mega-nerf-data/rubble-pixsfm-25-w-512.pt) [cluster masks](https://storage.cmusatyalab.org/mega-nerf-data/rubble-pixsfm-grid-25.tgz)
+- Building: [model](https://storage.cmusatyalab.org/mega-nerf-data/building-pixsfm-25-w-512.pt) [cluster masks](https://storage.cmusatyalab.org/mega-nerf-data/building-pixsfm-grid-25.tgz)
+- Residence: [model](https://storage.cmusatyalab.org/mega-nerf-data/residence-pixsfm-25-w-512.pt) [cluster masks](https://storage.cmusatyalab.org/mega-nerf-data/residence-pixsfm-grid-25.tgz)
+- Sci-Art: [model](https://storage.cmusatyalab.org/mega-nerf-data/sci-art-pixsfm-25-w-512.pt) [cluster masks](https://storage.cmusatyalab.org/mega-nerf-data/sci-art-pixsfm-grid-25.tgz)
+
 ## Data
 
 ### Mill 19
