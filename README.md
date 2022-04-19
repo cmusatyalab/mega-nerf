@@ -74,7 +74,9 @@ The codebase has been mainly tested against CUDA >= 11.1 and V100/2080 Ti/3090 T
 
 ### Custom Data
 
-The expected directory structure is:
+We strongly recommend using [PixSFM](https://github.com/cvg/pixel-perfect-sfm) to refine camera poses for your own datasets. Mega-NeRF also assumes that the dataset is properly geo-referenced/aligned such that the second value of its `ray_altitude_range` parameter properly corresponds to ground level. If using PixSFM/COLMAP the [model_aligner](https://colmap.github.io/faq.html#geo-registration) utility might be helpful, with [Manhattan world alignment](https://colmap.github.io/faq.html#manhattan-world-alignment) being a possible fallback option if GPS alignment is not possible. We provide a [script](https://github.com/cmusatyalab/mega-nerf/blob/main/scripts/colmap_to_mega_nerf.py) to convert from PixSFM/COLMAP output to the format Mega-NeRF expects.
+
+If creating a custom dataset manually, the expected directory structure is:
 - /coordinates.pt: [Torch file](https://pytorch.org/docs/stable/generated/torch.save.html) that should contain the following keys:
   - 'origin_drb': Origin of scene in real-world units
   - 'pose_scale_factor': Scale factor mapping from real-world unit (ie: meters) to [-1, 1] range
