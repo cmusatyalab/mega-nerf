@@ -102,13 +102,13 @@ def _render_images(hparams: Namespace) -> None:
         img = Image.fromarray(rgbs)
         img.save(output / 'rgbs' / '{0:06d}.jpg'.format(i))
 
-        depth = results[f'depth_{typ}'].view(H, W).cpu()
+        depth = torch.nan_to_num(results[f'depth_{typ}']).view(H, W).cpu()
 
         if hparams.save_depth_npz:
             np.save(str(output / 'depths_npz' / '{0:06d}.npy'.format(i)), (depth * pose_scale_factor).numpy())
 
         if f'bg_depth_{typ}' in results:
-            to_use = results[f'fg_depth_{typ}'].view(-1)
+            to_use = torch.nan_to_num(results[f'fg_depth_{typ}']).view(-1)
             while to_use.shape[0] > 2 ** 24:
                 to_use = to_use[::2]
             ma = torch.quantile(to_use, 0.95)
