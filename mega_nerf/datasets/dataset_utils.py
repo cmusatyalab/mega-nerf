@@ -35,5 +35,5 @@ def get_rgb_index_mask(metadata: ImageMetadata) -> Optional[
         keep_mask = keep_mask.view(-1)
         rgbs = rgbs[keep_mask == True]
 
-    assert metadata.image_index <= torch.iinfo(torch.short).max
-    return rgbs, metadata.image_index * torch.ones(rgbs.shape[0], dtype=torch.short), keep_mask
+    assert metadata.image_index <= torch.iinfo(torch.int32).max
+    return rgbs, metadata.image_index * torch.ones(rgbs.shape[0], dtype=torch.int32), keep_mask

@@ -243,7 +243,7 @@ class Runner:
 
                 with torch.cuda.amp.autocast(enabled=self.hparams.amp):
                     if self.hparams.appearance_dim > 0:
-                        image_indices = item['image_indices'].to(self.device, non_blocking=True)
+                        image_indices = item['img_indices'].to(self.device, non_blocking=True)
                     else:
                         image_indices = None
 

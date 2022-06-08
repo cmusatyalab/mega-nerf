@@ -50,7 +50,7 @@ class MemoryDataset(Dataset):
 
         self._rgbs = torch.cat(rgbs)
         self._rays = torch.cat(rays)
-        self._image_indices = torch.cat(indices)
+        self._img_indices = torch.cat(indices)
 
     def __len__(self) -> int:
         return self._rgbs.shape[0]
@@ -59,5 +59,5 @@ class MemoryDataset(Dataset):
         return {
             'rgbs': self._rgbs[idx],
             'rays': self._rays[idx],
-            'image_indices': self._image_indices[idx]
+            'img_indices': self._img_indices[idx]
         }
