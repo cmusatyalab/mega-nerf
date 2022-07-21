@@ -9,13 +9,13 @@ The codebase for the Mega-NeRF-Dynamic viewer can be found [here](https://github
 ## Citation
 
 ```
-@misc{turki2021meganerf,
-      title={Mega-NeRF: Scalable Construction of Large-Scale NeRFs for Virtual Fly-Throughs}, 
-      author={Haithem Turki and Deva Ramanan and Mahadev Satyanarayanan},
-      year={2021},
-      eprint={2112.10703},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV}
+@InProceedings{Turki_2022_CVPR,
+    author    = {Turki, Haithem and Ramanan, Deva and Satyanarayanan, Mahadev},
+    title     = {Mega-NERF: Scalable Construction of Large-Scale NeRFs for Virtual Fly-Throughs},
+    booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+    month     = {June},
+    year      = {2022},
+    pages     = {12922-12931}
 }
 ```
 
