@@ -11,6 +11,9 @@ import torch
 import torch.distributed as dist
 from torch.distributed.elastic.multiprocessing.errors import record
 
+from pathlib import Path
+import sys
+sys.path.append(str(Path.cwd()))
 from mega_nerf.misc_utils import main_tqdm, main_print
 from mega_nerf.opts import get_opts_base
 from mega_nerf.ray_utils import get_ray_directions, get_rays
