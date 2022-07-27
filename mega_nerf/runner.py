@@ -54,6 +54,9 @@ class Runner:
         self.hparams = hparams
 
         if 'RANK' in os.environ:
+            """
+            多卡训练, 区分主从机
+            """
             dist.init_process_group(backend='nccl', timeout=datetime.timedelta(0, hours=24))
             torch.cuda.set_device(int(os.environ['LOCAL_RANK']))
             self.is_master = (int(os.environ['RANK']) == 0)
@@ -143,9 +146,13 @@ class Runner:
                                        torch.FloatTensor(self.ray_altitude_range))), \
                     '{} {}'.format(self.ray_altitude_range, cluster_params['ray_altitude_range'])
 
+        # 读取元信息
         self.train_items, self.val_items = self._get_image_metadata()
         main_print('Using {} train images and {} val images'.format(len(self.train_items), len(self.val_items)))
 
+        """
+        重新计算了相机位置的范围, 不知道为什么不重用 params.pt 中的数据
+        """
         camera_positions = torch.cat([x.c2w[:3, 3].unsqueeze(0) for x in self.train_items + self.val_items])
         min_position = camera_positions.min(dim=0)[0]
         max_position = camera_positions.max(dim=0)[0]
@@ -155,12 +162,19 @@ class Runner:
 
         main_print('Camera range in [-1, 1] space: {} {}'.format(min_position, max_position))
 
+        """
+        初始化 NeRF 模型
+        """
         self.nerf = get_nerf(hparams, len(self.train_items)).to(self.device)
         if 'RANK' in os.environ:
             self.nerf = torch.nn.parallel.DistributedDataParallel(self.nerf, device_ids=[int(os.environ['LOCAL_RANK'])],
                                                                   output_device=int(os.environ['LOCAL_RANK']))
 
         if hparams.bg_nerf:
+            """
+            使用前后景分离的方式训练
+            - 如果指定 hparams.ellipse_bounds, 则使用椭球将所有相机位置囊括起来，否则使用球形边界 (NeRF++)
+            """
             self.bg_nerf = get_bg_nerf(hparams, len(self.train_items)).to(self.device)
             if 'RANK' in os.environ:
                 self.bg_nerf = torch.nn.parallel.DistributedDataParallel(self.bg_nerf,
@@ -168,6 +182,9 @@ class Runner:
                                                                          output_device=int(os.environ['LOCAL_RANK']))
 
             if hparams.ellipse_bounds:
+                """
+                使用椭球作为相机位姿的边界, 椭球的中心为相机位置的平均值, 将所有可能出现的相机位置都包含在椭球内
+                """
                 assert hparams.ray_altitude_range is not None
 
                 if self.ray_altitude_range is not None:
@@ -184,7 +201,9 @@ class Runner:
                                                                                                  max_position))
 
                 self.sphere_center = ((max_position + min_position) * 0.5).to(self.device)
+                # 取相机位置的最大距离作为椭球的半径初值
                 self.sphere_radius = ((max_position - min_position) * 0.5).to(self.device)
+                # 考虑光线的高度范围, 将椭球的半径扩大一些
                 scale_factor = ((used_positions.to(self.device) - self.sphere_center) / self.sphere_radius).norm(
                     dim=-1).max()
 
@@ -198,6 +217,7 @@ class Runner:
             self.bg_nerf = None
             self.sphere_center = None
             self.sphere_radius = None
+        # end __init__
 
     def train(self):
         self._setup_experiment_dir()
@@ -667,6 +687,10 @@ class Runner:
         for i, train_path in enumerate(train_paths):
             image_indices[train_path.name] = i
 
+        """
+        这里训练集中也会有验证集的图片, 用于训练 per-image 的 appearance embedding
+        - 详见: https://github.com/cmusatyalab/mega-nerf/issues/18
+        """
         train_items = [
             self._get_metadata_item(x, image_indices[x.name], self.hparams.train_scale_factor, x in val_paths_set) for x
             in train_paths]
@@ -681,21 +705,14 @@ class Runner:
         从元数据文件中读入元信息
         - 确认对应的图片存在
         - 加载对应的元信息 pt 文件
-            - H, W: 图片的高和宽
-            - c2w: 图片的变换矩阵, torch.Tensor, shape=(3, 4)
-                - 旋转矩阵是 (right, up, backwards)
-                - 平移是 (down, right, backwards)
-                - 详见： https://github.com/cmusatyalab/mega-nerf/issues/3
-            - intrinsics: 图片的内参, torch.Tensor, (fx, fy, cx, cy)
-            - distortion: torch.Tensor, shape=(4)
         - 将内参按照 scale_factor 缩放, 确保图片大小能够被 scale_factor 整除
-        
+
         Input:
-            metadata_path: 元数据文件路径
+            metadata_path: 元数据文件路径, 地址是训练集或验证集中 rgbs/metadata/{image_name}.pt
             image_index: 图像索引
             scale_factor: 图像缩放比例
             is_val: 是否为验证集
-        Output:
+        Return:
             ImageMetadata: 元信息
         """
         image_path = None
@@ -707,11 +724,30 @@ class Runner:
 
         assert image_path.exists()
 
+        """
+        加载对应的元信息 pt 文件
+        - H, W: 图片的高和宽
+        - c2w: 图片的变换矩阵, torch.Tensor, shape=(3, 4)
+            - 旋转矩阵是 (right, up, backwards)
+            - 平移是 (down, right, backwards)
+            - 详见： https://github.com/cmusatyalab/mega-nerf/issues/3
+        - intrinsics: 图片的内参, torch.Tensor, (fx, fy, cx, cy)
+        - distortion: torch.Tensor, shape=(4)
+        """
         metadata = torch.load(metadata_path, map_location='cpu')
         intrinsics = metadata['intrinsics'] / scale_factor
         assert metadata['W'] % scale_factor == 0
         assert metadata['H'] % scale_factor == 0
 
+        """
+        加载对应的 masks 文件夹中的 metadata
+        - 该文件是一个 ZipFile, 需要用 ZipFile.open 打开后用 torch.load 读取
+        - 详见: scripts/create_cluster_masks.py
+        - 其中的 mask 是一个 torch.Tensor, shape=(H, W), dtype=torch.bool
+
+        masks 的位置可以通过 hparams.cluster_mask_path 指定, 也可以放在数据集根目录下的 masks 目录中
+        如果都没有指定, 则 masks 为空, 因此 masks 不是必须的
+        """
         dataset_mask = metadata_path.parent.parent.parent / 'masks' / metadata_path.name
         if self.hparams.cluster_mask_path is not None:
             if image_index == 0:
@@ -724,6 +760,9 @@ class Runner:
         else:
             mask_path = None
 
+        """
+        当在 hparams 中指定 all_val 为真时, 不使用 masks 进行 inference
+        """
         return ImageMetadata(image_path, metadata['c2w'], metadata['W'] // scale_factor, metadata['H'] // scale_factor,
                              intrinsics, image_index, None if (is_val and self.hparams.all_val) else mask_path, is_val)
 
