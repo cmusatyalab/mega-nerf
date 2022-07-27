@@ -140,7 +140,7 @@ class Runner:
 
             if self.ray_altitude_range is not None:
                 assert (torch.allclose(torch.FloatTensor(cluster_params['ray_altitude_range']),
-                                       torch 和这里的参数是否一致.FloatTensor(self.ray_altitude_range))), \
+                                       torch.FloatTensor(self.ray_altitude_range))), \
                     '{} {}'.format(self.ray_altitude_range, cluster_params['ray_altitude_range'])
 
         self.train_items, self.val_items = self._get_image_metadata()
@@ -649,6 +649,9 @@ class Runner:
         return cv2.cvtColor(cv2.applyColorMap(scalar_tensor, cv2.COLORMAP_INFERNO), cv2.COLOR_BGR2RGB)
 
     def _get_image_metadata(self) -> Tuple[List[ImageMetadata], List[ImageMetadata]]:
+        """
+        从 hparams.dataset_path 指定的数据集位置读入元信息
+        """
         dataset_path = Path(self.hparams.dataset_path)
 
         train_path_candidates = sorted(list((dataset_path / 'train' / 'metadata').iterdir()))
@@ -674,6 +677,27 @@ class Runner:
 
     def _get_metadata_item(self, metadata_path: Path, image_index: int, scale_factor: int,
                            is_val: bool) -> ImageMetadata:
+        """
+        从元数据文件中读入元信息
+        - 确认对应的图片存在
+        - 加载对应的元信息 pt 文件
+            - H, W: 图片的高和宽
+            - c2w: 图片的变换矩阵, torch.Tensor, shape=(3, 4)
+                - 旋转矩阵是 (right, up, backwards)
+                - 平移是 (down, right, backwards)
+                - 详见： https://github.com/cmusatyalab/mega-nerf/issues/3
+            - intrinsics: 图片的内参, torch.Tensor, (fx, fy, cx, cy)
+            - distortion: torch.Tensor, shape=(4)
+        - 将内参按照 scale_factor 缩放, 确保图片大小能够被 scale_factor 整除
+        
+        Input:
+            metadata_path: 元数据文件路径
+            image_index: 图像索引
+            scale_factor: 图像缩放比例
+            is_val: 是否为验证集
+        Output:
+            ImageMetadata: 元信息
+        """
         image_path = None
         for extension in ['.jpg', '.JPG', '.png', '.PNG']:
             candidate = metadata_path.parent.parent / 'rgbs' / '{}{}'.format(metadata_path.stem, extension)
