@@ -22,6 +22,28 @@ def render_rays(nerf: nn.Module,
                 get_depth: bool,
                 get_depth_variance: bool,
                 get_bg_fg_rgb: bool) -> Tuple[Dict[str, torch.Tensor], bool]:
+    """
+    根据输入的 rays, 返回对应的渲染结果
+    Inputs:
+    - nerf: 前景渲染模型
+        - training: 是否在训练阶段
+        - cluster_dim_start: 
+    - bg_nerf: 背景渲染模型 (可选, 根据 hparams.bg_nerf 来决定是否使用)
+    - rays: (N_rays, 8)
+        - rays[:, :3]: 光线的起点
+        - rays[:, 3:6]: 光线的方向
+        - rays[:, 6:7]: near, 积分起点
+        - rays[:, 7:8]: far, 积分终点
+    - image_indices: (N_rays,)
+    - hparams: 参数
+        - perturb: float, 对 z_vals 进行随机扰动的大小范围
+    - sphere_center: (3,), 椭球的中心 (x0, y0, z0), 当使用 NeRF++ 时, 该参数为 None, 此时使用单位球
+    - sphere_radius: (3,), 椭球的三个轴长 (a, b, c), 当使用 NeRF++ 时, 该参数为 None, 此时使用单位球
+    - get_depth: 是否获取深度图
+    - get_depth_variance: 是否获取深度图的方差
+    - get_bg_fg_rgb: 是否获取前景背景渲染图片
+    TODO: 补充
+    """
     N_rays = rays.shape[0]
 
     rays_o, rays_d = rays[:, 0:3], rays[:, 3:6]  # both (N_rays, 3)
@@ -32,8 +54,17 @@ def render_rays(nerf: nn.Module,
     perturb = hparams.perturb if nerf.training else 0
     last_delta = 1e10 * torch.ones(N_rays, 1, device=rays.device)
     if bg_nerf is not None:
+        """
+        使用前后景渲染模型
+        - 首先计算射线与单位球/椭球的交点处的 z_val 作为前景模型的新的 far 值
+        - 获得背景模型的需要的射线
+        """
         fg_far = _intersect_sphere(rays_o, rays_d, sphere_center, sphere_radius)
+
+        # 如果交点处的 z_val 小于 near, 则用 near 代替, 即全部场景都在背景中
         fg_far = torch.maximum(fg_far, near.squeeze())
+        
+        # 需要使用背景模型计算的射线
         rays_with_bg = torch.arange(N_rays, device=rays_o.device)[far.squeeze() > fg_far]
 
         rays_o = rays_o.view(rays_o.shape[0], 1, rays_o.shape[1])
@@ -42,10 +73,12 @@ def render_rays(nerf: nn.Module,
         if rays_with_bg.shape[0] > 0:
             last_delta[rays_with_bg, 0] = fg_far[rays_with_bg]
 
+            # 前景模型的 far 值更新
             far = torch.minimum(far.squeeze(), fg_far).unsqueeze(-1)
 
             bg_z_vals = torch.linspace(0, 1, hparams.coarse_samples // 2,
                                        device=rays.device)  # Use half as many samples for background
+            # 获取所有采样点的 z_val 并添加随机扰动
             bg_z_vals = _expand_and_perturb_z_vals(bg_z_vals, hparams.coarse_samples // 2, perturb,
                                                    rays_with_bg.shape[0])
 
@@ -395,7 +428,21 @@ def _inference(results: Dict[str, torch.Tensor],
 
 def _intersect_sphere(rays_o: torch.Tensor, rays_d: torch.Tensor, sphere_center: torch.Tensor,
                       sphere_radius: torch.Tensor) -> torch.Tensor:
+    """
+    计算光线与球的交点处的z值
+    推导过程见: https://www.wolai.com/wuzirui/ccsW8Q5o7gKrf2rE61oKFN#x66MJ6Um36LZA5zABs4doZ
+    Inputs:
+    - rays_o: (..., 3), 光线起点
+    - rays_d: (..., 3), 光线方向
+    - sphere_center: (3) or None, 椭球的中心 (x0, y0, z0), 当使用 NeRF++ 时, 该参数为 None, 此时使用单位球
+    - sphere_radius: (3) or None, 椭球的三个轴长 (a, b, c), 当使用 NeRF++ 时, 该参数为 None, 此时使用单位球
+    Returns:
+    - z_vals: (..., 1) 光线与球的交点处的z值
+    """
     if sphere_radius is not None:
+        """
+        使用椭球, 将射线归一化到单位球里面, 然后再按照单位球进行求解
+        """
         rays_o = (rays_o - sphere_center) / sphere_radius
         rays_d = rays_d / sphere_radius
 
@@ -409,6 +456,9 @@ def _intersect_sphere(rays_o: torch.Tensor, rays_d: torch.Tensor, sphere_center:
     # consider the case where the ray does not intersect the sphere
     ray_d_cos = 1. / torch.norm(rays_d, dim=-1)
     p_norm_sq = torch.sum(p * p, dim=-1)
+    """
+    当原点到两个交点的中点的向量长度>1时, 说明相机不在球体内, 不过这种方法是否多少有些奇怪?
+    """
     if (p_norm_sq >= 1.).any():
         raise Exception(
             'Not all your cameras are bounded by the unit sphere; please make sure the cameras are normalized properly!')
@@ -470,6 +520,16 @@ def _depth2pts_outside(rays_o: torch.Tensor, rays_d: torch.Tensor, depth: torch.
 
 
 def _expand_and_perturb_z_vals(z_vals, samples, perturb, N_rays):
+    """
+    将 z_vals 扩展到 N_rays 个样本, 并且对每个样本进行随机噪声
+    Inputs:
+    - z_vals: (..., 1), 归一化空间中采样的深度
+    - samples: int, 光线上采样的个数
+    - perturb: float, 随机扰动的范围
+    - N_rays: int, 光线数量
+    Return:
+    - z_vals_expanded: (..., samples, 1)
+    """
     z_vals = z_vals.expand(N_rays, samples)
     if perturb > 0:  # perturb sampling depths (z_vals)
         z_vals_mid = 0.5 * (z_vals[:, :-1] + z_vals[:, 1:])  # (N_rays, N_samples-1) interval mid points

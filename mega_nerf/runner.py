@@ -40,11 +40,13 @@ class Runner:
         faulthandler.register(signal.SIGUSR1)
 
         if hparams.ckpt_path is not None:
+            # 从上一次训练中恢复随机数生成器状态, 并没有加载具体模型 (见 train())
             checkpoint = torch.load(hparams.ckpt_path, map_location='cpu')
             np.random.set_state(checkpoint['np_random_state'])
             torch.set_rng_state(checkpoint['torch_random_state'])
             random.setstate(checkpoint['random_state'])
         else:
+            # 新一次训练，需要设置随机数生成器的种子
             np.random.seed(hparams.random_seed)
             torch.manual_seed(hparams.random_seed)
             random.seed(hparams.random_seed)
@@ -52,6 +54,9 @@ class Runner:
         self.hparams = hparams
 
         if 'RANK' in os.environ:
+            """
+            多卡训练, 区分主从机
+            """
             dist.init_process_group(backend='nccl', timeout=datetime.timedelta(0, hours=24))
             torch.cuda.set_device(int(os.environ['LOCAL_RANK']))
             self.is_master = (int(os.environ['RANK']) == 0)
@@ -62,18 +67,33 @@ class Runner:
         main_print(hparams)
 
         if set_experiment_path:
-            self.experiment_path = self._get_experiment_path() if self.is_master else None
-            self.model_path = self.experiment_path / 'models' if self.is_master else None
+            self.experiment_path = self._get_experiment_path() if self.is_master else None  # 实验根目录
+            self.model_path = self.experiment_path / 'models' if self.is_master else None  # 模型 checkpoints 文件目录
 
         self.writer = None
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+        """
+        加载数据集
+        - coordinates.pt 中包含数据集的坐标原点和坐标系的 scale_factor
+            - origin_drb: 坐标原点的坐标 (down-right-back), torch.Tensor, shape = (3)
+            - scale_factor: 坐标系的 scale_factor, 使整个坐标系中所有相机位姿缩放到 [-1, 1], type=int
+        - hparams.dataset_path: 数据集的路径，在 train.py 中定义
+        """
         coordinate_info = torch.load(Path(hparams.dataset_path) / 'coordinates.pt', map_location='cpu')
         self.origin_drb = coordinate_info['origin_drb']
         self.pose_scale_factor = coordinate_info['pose_scale_factor']
         main_print('Origin: {}, scale factor: {}'.format(self.origin_drb, self.pose_scale_factor))
 
+        """
+        - hparams.near (opts.py): 相机的近距离边界, 单位: m, 默认均为1
+        - hparams.far (opts.py): 相机的远距离边界, 单位: m, 默认为 None, 这时会根据是否使用前后景划分自动设置
+        - hparams.bg_nerf (opts.py): 是否使用背景 NeRF, 默认为 True
+            - 当设置了 hparams.far 时，将该值除以 pose_scale_factor
+            - 当未设置 hparams.far 且 hparams.bg_nerf 为 True 时,far = 1e5
+            - 当未设置 hparams.far 且 hparams.bg_nerf 为 False 时,far = 2, 即整个场景会被归一化
+        """
         self.near = hparams.near / self.pose_scale_factor
 
         if self.hparams.far is not None:
@@ -85,6 +105,10 @@ class Runner:
 
         main_print('Ray bounds: {}, {}'.format(self.near, self.far))
 
+        """
+        将场景光线的高度范围根据 origin_drb 和 pose_scale_factor 进行归一化
+        该参数是一个经验性的参数, 详见 https://github.com/cmusatyalab/mega-nerf/issues/6#issuecomment-1103187971
+        """
         self.ray_altitude_range = [(x - self.origin_drb[0]) / self.pose_scale_factor for x in
                                    hparams.ray_altitude_range] if hparams.ray_altitude_range is not None else None
         main_print('Ray altitude range in [-1, 1] space: {}'.format(self.ray_altitude_range))
@@ -93,6 +117,24 @@ class Runner:
         if self.ray_altitude_range is not None:
             assert self.ray_altitude_range[0] < self.ray_altitude_range[1]
 
+        """
+        导入 create_cluster_masks.py 生成的 mask
+        - 检查 near, origin_drb, pose_scale_factor, ray_altitude_range 和这里的参数是否一致
+        - params.pt 里面的内容：
+            - origin_drb: 坐标原点的坐标 (down-right-back), torch.Tensor, shape = (3)
+            - pose_scale_factor: 坐标系的 scale_factor, 使整个坐标系中所有相机位姿缩放到 [-1, 1], type=int
+            - ray_altitude_range: 归一化到 [-1, 1] 的光线高度范围, type=list, [torch.FloatTensor, torch.FloatTensor]
+            - near: 相机的近距离边界, 单位: m, 默认均为1, type=float
+            - far: 相机的远距离边界, 单位: m, 默认为 2, 这个数据好像不会被使用 TODO: 检查
+            - centroids: 各个类的中心点, type=torch.Tensor
+                - shape=(n_clusters, 3), n_clusters = grid_x * grid_y
+                - 每个中心点用一个 3D 坐标表示，坐标是归一化后的
+            - grid_dim: 网格划分的维度, list[int, int], 分别为 x 和 y 轴上划分的块的数目, 即 [grid_x, grid_y]
+                - 这个参数的设置也是经验性的, 详见 https://github.com/cmusatyalab/mega-nerf/issues/5
+            - min_position: 所有相机位置范围的最小值, type=torch.Tensor, shape=(3)
+            - max_position: 所有相机位置范围的最大值, type=torch.Tensor, shape=(3)
+            - cluster_2d: type=bool TODO: 看看这个是干啥的
+        """
         if self.hparams.cluster_mask_path is not None:
             cluster_params = torch.load(Path(self.hparams.cluster_mask_path).parent / 'params.pt', map_location='cpu')
             assert cluster_params['near'] == self.near
@@ -104,9 +146,13 @@ class Runner:
                                        torch.FloatTensor(self.ray_altitude_range))), \
                     '{} {}'.format(self.ray_altitude_range, cluster_params['ray_altitude_range'])
 
+        # 读取元信息
         self.train_items, self.val_items = self._get_image_metadata()
         main_print('Using {} train images and {} val images'.format(len(self.train_items), len(self.val_items)))
 
+        """
+        重新计算了相机位置的范围, 不知道为什么不重用 params.pt 中的数据
+        """
         camera_positions = torch.cat([x.c2w[:3, 3].unsqueeze(0) for x in self.train_items + self.val_items])
         min_position = camera_positions.min(dim=0)[0]
         max_position = camera_positions.max(dim=0)[0]
@@ -116,12 +162,19 @@ class Runner:
 
         main_print('Camera range in [-1, 1] space: {} {}'.format(min_position, max_position))
 
+        """
+        初始化 NeRF 模型
+        """
         self.nerf = get_nerf(hparams, len(self.train_items)).to(self.device)
         if 'RANK' in os.environ:
             self.nerf = torch.nn.parallel.DistributedDataParallel(self.nerf, device_ids=[int(os.environ['LOCAL_RANK'])],
                                                                   output_device=int(os.environ['LOCAL_RANK']))
 
         if hparams.bg_nerf:
+            """
+            使用前后景分离的方式训练
+            - 如果指定 hparams.ellipse_bounds, 则使用椭球将所有相机位置囊括起来，否则使用球形边界 (NeRF++)
+            """
             self.bg_nerf = get_bg_nerf(hparams, len(self.train_items)).to(self.device)
             if 'RANK' in os.environ:
                 self.bg_nerf = torch.nn.parallel.DistributedDataParallel(self.bg_nerf,
@@ -129,6 +182,9 @@ class Runner:
                                                                          output_device=int(os.environ['LOCAL_RANK']))
 
             if hparams.ellipse_bounds:
+                """
+                使用椭球作为相机位姿的边界, 椭球的中心为相机位置的平均值, 将所有可能出现的相机位置都包含在椭球内
+                """
                 assert hparams.ray_altitude_range is not None
 
                 if self.ray_altitude_range is not None:
@@ -145,7 +201,9 @@ class Runner:
                                                                                                  max_position))
 
                 self.sphere_center = ((max_position + min_position) * 0.5).to(self.device)
+                # 取相机位置的最大距离作为椭球的半径初值
                 self.sphere_radius = ((max_position - min_position) * 0.5).to(self.device)
+                # 考虑光线的高度范围, 将椭球的半径扩大一些
                 scale_factor = ((used_positions.to(self.device) - self.sphere_center) / self.sphere_radius).norm(
                     dim=-1).max()
 
@@ -159,18 +217,26 @@ class Runner:
             self.bg_nerf = None
             self.sphere_center = None
             self.sphere_radius = None
+        # end __init__
 
     def train(self):
         self._setup_experiment_dir()
 
+        # 自动混合精度计算, 通过 hparams.amp 指定
         scaler = torch.cuda.amp.GradScaler(enabled=self.hparams.amp)
 
+        """
+        初始化 optimizers, 使用 Adam 训练, 前后景模型使用两个不同的 optimizer
+        """
         optimizers = {}
         optimizers['nerf'] = Adam(self.nerf.parameters(), lr=self.hparams.lr)
         if self.bg_nerf is not None:
             optimizers['bg_nerf'] = Adam(self.bg_nerf.parameters(), lr=self.hparams.lr)
 
         if self.hparams.ckpt_path is not None:
+            """
+            从 checkpoint 恢复模型参数
+            """
             checkpoint = torch.load(self.hparams.ckpt_path, map_location='cpu')
             train_iterations = checkpoint['iteration']
 
@@ -187,12 +253,20 @@ class Runner:
             train_iterations = 0
             discard_index = -1
 
+        """
+        学习率衰减
+        - ExponentialLR 规划器, 学习率衰减速度由 hparams.lr_decay_rate 和训练轮数指定
+        """
         schedulers = {}
         for key, optimizer in optimizers.items():
             schedulers[key] = ExponentialLR(optimizer,
                                             gamma=self.hparams.lr_decay_factor ** (1 / self.hparams.train_iterations),
                                             last_epoch=train_iterations - 1)
 
+        """
+        加载数据集
+        TODO: 补全
+        """
         if self.hparams.dataset_type == 'filesystem':
             # Let the local master write data to disk first
             # We could further parallelize the disk writing process by having all of the ranks write data,
@@ -225,6 +299,9 @@ class Runner:
             if self.hparams.dataset_type == 'filesystem' and discard_index == -1:
                 dataset.load_chunk()
 
+            """
+            创建 DataLoader
+            """
             if 'RANK' in os.environ:
                 world_size = int(os.environ['WORLD_SIZE'])
                 sampler = DistributedSampler(dataset, world_size, int(os.environ['RANK']))
@@ -322,6 +399,13 @@ class Runner:
             self.writer.close()
 
     def _setup_experiment_dir(self) -> None:
+        """
+        初始化实验运行目录
+        - 保存 hparams
+        - 保存运行指令
+        - 保存 image_indices
+        - 初始化 Tensorboard Writer
+        """
         if self.is_master:
             self.experiment_path.mkdir()
             with (self.experiment_path / 'hparams.txt').open('w') as f:
@@ -343,6 +427,7 @@ class Runner:
 
         if 'RANK' in os.environ:
             dist.barrier()
+        # end _setup_experiment_dir
 
     def _training_step(self, rgbs: torch.Tensor, rays: torch.Tensor, image_indices: Optional[torch.Tensor]) \
             -> Tuple[Dict[str, Union[torch.Tensor, float]], bool]:
@@ -610,6 +695,9 @@ class Runner:
         return cv2.cvtColor(cv2.applyColorMap(scalar_tensor, cv2.COLORMAP_INFERNO), cv2.COLOR_BGR2RGB)
 
     def _get_image_metadata(self) -> Tuple[List[ImageMetadata], List[ImageMetadata]]:
+        """
+        从 hparams.dataset_path 指定的数据集位置读入元信息
+        """
         dataset_path = Path(self.hparams.dataset_path)
 
         train_path_candidates = sorted(list((dataset_path / 'train' / 'metadata').iterdir()))
@@ -625,6 +713,10 @@ class Runner:
         for i, train_path in enumerate(train_paths):
             image_indices[train_path.name] = i
 
+        """
+        这里训练集中也会有验证集的图片, 用于训练 per-image 的 appearance embedding
+        - 详见: https://github.com/cmusatyalab/mega-nerf/issues/18
+        """
         train_items = [
             self._get_metadata_item(x, image_indices[x.name], self.hparams.train_scale_factor, x in val_paths_set) for x
             in train_paths]
@@ -635,6 +727,20 @@ class Runner:
 
     def _get_metadata_item(self, metadata_path: Path, image_index: int, scale_factor: int,
                            is_val: bool) -> ImageMetadata:
+        """
+        从元数据文件中读入元信息
+        - 确认对应的图片存在
+        - 加载对应的元信息 pt 文件
+        - 将内参按照 scale_factor 缩放, 确保图片大小能够被 scale_factor 整除
+
+        Input:
+            metadata_path: 元数据文件路径, 地址是训练集或验证集中 rgbs/metadata/{image_name}.pt
+            image_index: 图像索引
+            scale_factor: 图像缩放比例
+            is_val: 是否为验证集
+        Return:
+            ImageMetadata: 元信息
+        """
         image_path = None
         for extension in ['.jpg', '.JPG', '.png', '.PNG']:
             candidate = metadata_path.parent.parent / 'rgbs' / '{}{}'.format(metadata_path.stem, extension)
@@ -644,11 +750,30 @@ class Runner:
 
         assert image_path.exists()
 
+        """
+        加载对应的元信息 pt 文件
+        - H, W: 图片的高和宽
+        - c2w: 图片的变换矩阵, torch.Tensor, shape=(3, 4)
+            - 旋转矩阵是 (right, up, backwards)
+            - 平移是 (down, right, backwards)
+            - 详见： https://github.com/cmusatyalab/mega-nerf/issues/3
+        - intrinsics: 图片的内参, torch.Tensor, (fx, fy, cx, cy)
+        - distortion: torch.Tensor, shape=(4)
+        """
         metadata = torch.load(metadata_path, map_location='cpu')
         intrinsics = metadata['intrinsics'] / scale_factor
         assert metadata['W'] % scale_factor == 0
         assert metadata['H'] % scale_factor == 0
 
+        """
+        加载对应的 masks 文件夹中的 metadata
+        - 该文件是一个 ZipFile, 需要用 ZipFile.open 打开后用 torch.load 读取
+        - 详见: scripts/create_cluster_masks.py
+        - 其中的 mask 是一个 torch.Tensor, shape=(H, W), dtype=torch.bool
+
+        masks 的位置可以通过 hparams.cluster_mask_path 指定, 也可以放在数据集根目录下的 masks 目录中
+        如果都没有指定, 则 masks 为空, 因此 masks 不是必须的
+        """
         dataset_mask = metadata_path.parent.parent.parent / 'masks' / metadata_path.name
         if self.hparams.cluster_mask_path is not None:
             if image_index == 0:
@@ -661,10 +786,17 @@ class Runner:
         else:
             mask_path = None
 
+        """
+        当在 hparams 中指定 all_val 为真时, 不使用 masks 进行 inference
+        """
         return ImageMetadata(image_path, metadata['c2w'], metadata['W'] // scale_factor, metadata['H'] // scale_factor,
                              intrinsics, image_index, None if (is_val and self.hparams.all_val) else mask_path, is_val)
 
     def _get_experiment_path(self) -> Path:
+        """
+        创建新的实验目录，并返回实验目录的路径
+        在输入参数中 exp_name 中新建一个 version 目录，名称为版本号
+        """
         exp_dir = Path(self.hparams.exp_name)
         exp_dir.mkdir(parents=True, exist_ok=True)
         existing_versions = [int(x.name) for x in exp_dir.iterdir()]

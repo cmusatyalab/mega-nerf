@@ -130,3 +130,8 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# mega-nerf experiments
+datasets/
+exp/
+parscripts/*-*.txt
