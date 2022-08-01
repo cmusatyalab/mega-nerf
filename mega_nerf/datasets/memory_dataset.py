@@ -3,7 +3,7 @@ from typing import List, Dict
 import torch
 from torch.utils.data import Dataset
 
-from mega_nerf.datasets.dataset_utils import get_rgb_index_mask
+from mega_nerf.datasets.dataset_utils import get_rgbd_index_mask
 from mega_nerf.image_metadata import ImageMetadata
 from mega_nerf.misc_utils import main_tqdm, main_print
 from mega_nerf.ray_utils import get_rays, get_ray_directions
@@ -22,7 +22,7 @@ class MemoryDataset(Dataset):
         main_print('Loading data')
 
         for metadata_item in main_tqdm(metadata_items):
-            image_data = get_rgb_index_mask(metadata_item)
+            image_data = get_rgbd_index_mask(metadata_item)
 
             if image_data is None:
                 continue

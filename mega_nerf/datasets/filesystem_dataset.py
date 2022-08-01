@@ -12,7 +12,7 @@ import pyarrow.parquet as pq
 import torch
 from torch.utils.data import Dataset
 
-from mega_nerf.datasets.dataset_utils import get_rgb_index_mask
+from mega_nerf.datasets.dataset_utils import get_rgbd_index_mask
 from mega_nerf.image_metadata import ImageMetadata
 from mega_nerf.misc_utils import main_tqdm, main_print
 from mega_nerf.ray_utils import get_ray_directions, get_rays, get_rays_batch
@@ -65,6 +65,7 @@ class FilesystemDataset(Dataset):
 
         self._chunk_index = cycle(range(len(self._parquet_paths)))
         self._loaded_rgbs = None
+        self._loaded_depths = None
         self._loaded_rays = None
         self._loaded_img_indices = None
         self._chunk_load_executor = ThreadPoolExecutor(max_workers=1)
@@ -72,7 +73,7 @@ class FilesystemDataset(Dataset):
         self._chosen = None
 
     def load_chunk(self) -> None:
-        chosen, self._loaded_rgbs, self._loaded_rays, self._loaded_img_indices = self._chunk_future.result()
+        chosen, self._loaded_rgbs, self._loaded_depths, self._loaded_rays, self._loaded_img_indices = self._chunk_future.result()
         self._chosen = chosen
         self._chunk_future = self._chunk_load_executor.submit(self._load_chunk_inner)
 
@@ -89,6 +90,7 @@ class FilesystemDataset(Dataset):
     def __getitem__(self, idx) -> Dict[str, torch.Tensor]:
         return {
             'rgbs': self._loaded_rgbs[idx],
+            'depths': self._loaded_depths[idx],
             'rays': self._loaded_rays[idx],
             'img_indices': self._loaded_img_indices[idx]
         }
@@ -129,15 +131,34 @@ class FilesystemDataset(Dataset):
                 loaded_chunk.to_pandas()[['rays_{}'.format(i) for i in range(8)]].to_numpy())
 
         rgbs = torch.FloatTensor(loaded_chunk.to_pandas()[['rgbs_{}'.format(i) for i in range(3)]].to_numpy()) / 255.
-        return str(chosen), rgbs, loaded_rays, loaded_img_indices
+        depths = torch.FloatTensor(loaded_chunk.to_pandas()[['depths']].to_numpy())
+        return str(chosen), rgbs, depths, loaded_rays, loaded_img_indices
 
     def _write_chunks(self, metadata_items: List[ImageMetadata], center_pixels: bool, device: torch.device,
                       chunk_paths: List[Path], num_chunks: int, scale_factor: int, disk_flush_size: int) -> None:
+        """
+        创建 chunk_dir 目录下的所有 chunk 文件
+        Inputs:
+        - metadata_items: 图像的元数据 [ImageMegadata]
+        - center_pixels: 是否将像素坐标转换为中心像素坐标
+        - device: 图像所在的设备 cpu/cuda
+        - chunk_paths: 每个 chunk 的路径, 这些目录不能被提前创建, 否则会报错
+        - num_chunks: chunk 数量
+        - scale_factor: 图像缩放的倍数
+        - disk_flush_size: 写入磁盘的最大块大小
+        TODO: check
+        """
+        # 主设备才需要执行这一部分
         assert ('RANK' not in os.environ) or int(os.environ['LOCAL_RANK']) == 0
 
         path_frees = []
         total_free = 0
 
+        """
+        创建各个 chunk 目录, 并检查所有目录中可用的 free 空间大小
+        - total_free 为所有目录中可用空间大小
+        - path_frees 为每个目录的可用空间大小
+        """
         for chunk_path in chunk_paths:
             chunk_path.mkdir(parents=True)
 
@@ -149,6 +170,9 @@ class FilesystemDataset(Dataset):
 
         index = 0
 
+        """
+        根据图片数量选择合适的数据类型 (int16/int32)
+        """
         max_index = max(metadata_items, key=lambda x: x.image_index).image_index
         if max_index <= np.iinfo(np.uint16).max:
             img_indices_dtype = np.uint16
@@ -159,9 +183,20 @@ class FilesystemDataset(Dataset):
         main_print('Max image index is {}: using dtype: {}'.format(max_index, img_indices_dtype))
 
         for chunk_path, path_free in zip(chunk_paths, path_frees):
+            """
+            将 chunks 平均分配给每个 chunk_dir
+            """
             allocated = int(path_free / total_free * num_chunks)
             main_print('Allocating {} chunks to dataset path {}'.format(allocated, chunk_path))
             for j in range(allocated):
+                """
+                写入 parquet 文件 (列式存储)
+                - img_indices: 图像的索引
+                - rgbs_0 ~ rgbs_2: 图像的 RGB 值
+                - depths: 图像的深度
+                - pixel_indices: 像素的索引
+                - rays_0 ~ rays_7: 像素的光线信息 (xyz (3), dir (3), near, far)
+                """
                 parquet_path = chunk_path / '{0:06d}.parquet'.format(index)
                 self._parquet_paths.append(parquet_path)
 
@@ -169,6 +204,7 @@ class FilesystemDataset(Dataset):
 
                 for i in range(3):
                     dtypes.append(('rgbs_{}'.format(i), pa.uint8()))
+                dtypes.append(('depths', pa.uint8()))
 
                 if self._directions is not None:
                     dtypes.append(('pixel_indices', pa.int32()))
@@ -184,6 +220,7 @@ class FilesystemDataset(Dataset):
 
         write_futures = []
         rgbs = []
+        depths = []
         rays = []
         indices = []
         in_memory_count = 0
@@ -193,16 +230,21 @@ class FilesystemDataset(Dataset):
 
         with ThreadPoolExecutor(max_workers=len(parquet_writers)) as executor:
             for metadata_item in main_tqdm(metadata_items):
-                image_data = get_rgb_index_mask(metadata_item)
+                # 读入图片 深度图 像素索引 和 mask
+                image_data = get_rgbd_index_mask(metadata_item)
 
                 if image_data is None:
                     continue
 
-                image_rgbs, img_indices, image_keep_mask = image_data
+                image_rgbs, image_depths, img_indices, image_keep_mask = image_data
                 rgbs.append(image_rgbs)
+                depths.append(image_depths)
                 indices.append(img_indices)
                 in_memory_count += len(image_rgbs)
 
+                """
+                计算该 metadata 下的光线
+                """
                 if self._directions is not None:
                     image_pixel_indices = all_pixel_indices
                     if image_keep_mask is not None:
@@ -230,7 +272,7 @@ class FilesystemDataset(Dataset):
                     for write_future in write_futures:
                         write_future.result()
 
-                    write_futures = self._write_to_disk(executor, torch.cat(rgbs), torch.cat(rays), torch.cat(indices),
+                    write_futures = self._write_to_disk(executor, torch.cat(rgbs), torch.cat(depths), torch.cat(rays), torch.cat(indices),
                                                         parquet_writers, img_indices_dtype)
 
                     rgbs = []
@@ -242,7 +284,7 @@ class FilesystemDataset(Dataset):
                 write_future.result()
 
             if in_memory_count > 0:
-                write_futures = self._write_to_disk(executor, torch.cat(rgbs), torch.cat(rays), torch.cat(indices),
+                write_futures = self._write_to_disk(executor, torch.cat(rgbs), torch.cat(depths), torch.cat(rays), torch.cat(indices),
                                                     parquet_writers, img_indices_dtype)
 
                 for write_future in write_futures:
@@ -268,6 +310,9 @@ class FilesystemDataset(Dataset):
 
     def _check_existing_paths(self, chunk_paths: List[Path], center_pixels: bool, scale_factor: int, images: int) -> \
             Optional[List[Path]]:
+        """
+        检查文件系统数据集的格式是否正确
+        """
         parquet_files = []
 
         num_exist = 0
@@ -301,11 +346,12 @@ class FilesystemDataset(Dataset):
         else:
             return None
 
-    def _write_to_disk(self, executor: ThreadPoolExecutor, rgbs: torch.Tensor, rays: torch.FloatTensor,
-                       img_indices: torch.Tensor, parquet_writers: List[pq.ParquetWriter],
+    def _write_to_disk(self, executor: ThreadPoolExecutor, rgbs: torch.Tensor, depths: torch.FloatTensor, 
+                       rays: torch.FloatTensor, img_indices: torch.Tensor, parquet_writers: List[pq.ParquetWriter],
                        img_indices_dtype: Type[Union[np.ushort, np.int]]) -> List[Future[None]]:
         indices = torch.randperm(rgbs.shape[0])
         shuffled_rgbs = rgbs[indices]
+        shuffled_depths = depths[indices]
         shuffled_rays = rays[indices]
         shuffled_img_indices = img_indices[indices]
 
@@ -322,6 +368,8 @@ class FilesystemDataset(Dataset):
 
             for i in range(rgbs.shape[1]):
                 columns['rgbs_{}'.format(i)] = shuffled_rgbs[index * chunk_size:(index + 1) * chunk_size, i].numpy()
+            
+            columns['depths'] = shuffled_depths[index * chunk_size:(index + 1) * chunk_size, 0].numpy()
 
             if self._directions is not None:
                 columns['pixel_indices'] = shuffled_rays[index * chunk_size:(index + 1) * chunk_size].numpy()
