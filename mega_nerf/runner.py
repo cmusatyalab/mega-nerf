@@ -40,7 +40,7 @@ class Runner:
         faulthandler.register(signal.SIGUSR1)
 
         if hparams.ckpt_path is not None:
-            # 从上一次训练中恢复 checkpoint 和随机数生成器状态
+            # 从上一次训练中恢复随机数生成器状态, 并没有加载具体模型 (见 train())
             checkpoint = torch.load(hparams.ckpt_path, map_location='cpu')
             np.random.set_state(checkpoint['np_random_state'])
             torch.set_rng_state(checkpoint['torch_random_state'])
@@ -222,14 +222,21 @@ class Runner:
     def train(self):
         self._setup_experiment_dir()
 
+        # 自动混合精度计算, 通过 hparams.amp 指定
         scaler = torch.cuda.amp.GradScaler(enabled=self.hparams.amp)
 
+        """
+        初始化 optimizers, 使用 Adam 训练, 前后景模型使用两个不同的 optimizer
+        """
         optimizers = {}
         optimizers['nerf'] = Adam(self.nerf.parameters(), lr=self.hparams.lr)
         if self.bg_nerf is not None:
             optimizers['bg_nerf'] = Adam(self.bg_nerf.parameters(), lr=self.hparams.lr)
 
         if self.hparams.ckpt_path is not None:
+            """
+            从 checkpoint 恢复模型参数
+            """
             checkpoint = torch.load(self.hparams.ckpt_path, map_location='cpu')
             train_iterations = checkpoint['iteration']
 
@@ -246,12 +253,20 @@ class Runner:
             train_iterations = 0
             discard_index = -1
 
+        """
+        学习率衰减
+        - ExponentialLR 规划器, 学习率衰减速度由 hparams.lr_decay_rate 和训练轮数指定
+        """
         schedulers = {}
         for key, optimizer in optimizers.items():
             schedulers[key] = ExponentialLR(optimizer,
                                             gamma=self.hparams.lr_decay_factor ** (1 / self.hparams.train_iterations),
                                             last_epoch=train_iterations - 1)
 
+        """
+        加载数据集
+        TODO: 补全
+        """
         if self.hparams.dataset_type == 'filesystem':
             # Let the local master write data to disk first
             # We could further parallelize the disk writing process by having all of the ranks write data,
@@ -284,6 +299,9 @@ class Runner:
             if self.hparams.dataset_type == 'filesystem' and discard_index == -1:
                 dataset.load_chunk()
 
+            """
+            创建 DataLoader
+            """
             if 'RANK' in os.environ:
                 world_size = int(os.environ['WORLD_SIZE'])
                 sampler = DistributedSampler(dataset, world_size, int(os.environ['RANK']))
@@ -381,6 +399,13 @@ class Runner:
             self.writer.close()
 
     def _setup_experiment_dir(self) -> None:
+        """
+        初始化实验运行目录
+        - 保存 hparams
+        - 保存运行指令
+        - 保存 image_indices
+        - 初始化 Tensorboard Writer
+        """
         if self.is_master:
             self.experiment_path.mkdir()
             with (self.experiment_path / 'hparams.txt').open('w') as f:
@@ -402,6 +427,7 @@ class Runner:
 
         if 'RANK' in os.environ:
             dist.barrier()
+        # end _setup_experiment_dir
 
     def _training_step(self, rgbs: torch.Tensor, rays: torch.Tensor, image_indices: Optional[torch.Tensor]) \
             -> Tuple[Dict[str, Union[torch.Tensor, float]], bool]:

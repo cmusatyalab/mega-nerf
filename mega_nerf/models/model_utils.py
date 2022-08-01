@@ -10,15 +10,44 @@ from mega_nerf.models.nerf import NeRF, ShiftedSoftplus
 
 
 def get_nerf(hparams: Namespace, appearance_count: int) -> nn.Module:
+    """
+    生成 NeRF-W 模型 (前景)
+    Inputs:
+    - hparams: 训练参数
+    - appearance_count: per-image appearance embedding 的个数, 即图片个数
+    Returns:
+    - nerf: NeRF-W 模型
+    """
     return _get_nerf_inner(hparams, appearance_count, hparams.layer_dim, 3, 'model_state_dict')
 
 
 def get_bg_nerf(hparams: Namespace, appearance_count: int) -> nn.Module:
+    """
+    生成 NeRF-W 模型 (背景)
+    Inputs:
+    - hparams: 训练参数
+    - appearance_count: per-image appearance embedding 的个数, 即图片个数
+    Returns:
+    - nerf: NeRF-W 模型 (背景, 输入坐标为 4 维, xyz + 归一化逆深度)
+    """
     return _get_nerf_inner(hparams, appearance_count, hparams.bg_layer_dim, 4, 'bg_model_state_dict')
 
 
 def _get_nerf_inner(hparams: Namespace, appearance_count: int, layer_dim: int, xyz_dim: int,
                     weight_key: str) -> nn.Module:
+    """
+    生成 NeRF-W 模型
+    - 如果 hparams.container_path 不为空, 即加载合并过的模型
+    - 如果 hparams.use_cascade 是 True, 即使用粗采样-精采样级联模型
+    Inputs:
+    - hparams: 训练参数
+    - appearance_count: per-image appearance embedding 的个数, 即图片个数
+    - layer_dim: 每层的维度
+    - xyz_dim: 输入坐标的维度, 3 维或 4 维, 如果为 4 维, 则输入坐标为 xyz + 归一化逆深度
+    - weight_key: 模型权重的 key, 用于加载/保存模型权重
+    Return:
+    - nerf: NeRF-W 模型
+    """
     if hparams.container_path is not None:
         container = torch.jit.load(hparams.container_path, map_location='cpu')
         if xyz_dim == 3:
@@ -30,7 +59,7 @@ def _get_nerf_inner(hparams: Namespace, appearance_count: int, layer_dim: int, x
     elif hparams.use_cascade:
         nerf = Cascade(
             _get_single_nerf_inner(hparams, appearance_count,
-                                   layer_dim if xyz_dim == 4 else layer_dim,
+                                   layer_dim if xyz_dim == 4 else layer_dim,    # 废话代码学 ?
                                    xyz_dim),
             _get_single_nerf_inner(hparams, appearance_count, layer_dim, xyz_dim))
     elif hparams.train_mega_nerf is not None:
