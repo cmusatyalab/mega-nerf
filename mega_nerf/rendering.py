@@ -42,7 +42,6 @@ def render_rays(nerf: nn.Module,
     - get_depth: 是否获取深度图
     - get_depth_variance: 是否获取深度图的方差
     - get_bg_fg_rgb: 是否获取前景背景渲染图片
-    TODO: 补充
     """
     N_rays = rays.shape[0]
 

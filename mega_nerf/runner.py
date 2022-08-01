@@ -265,9 +265,11 @@ class Runner:
 
         """
         加载数据集
-        TODO: 补全
         """
         if self.hparams.dataset_type == 'filesystem':
+            """
+            从磁盘中读取数据, 训练过程中需要将部分数据存储在一个缓冲区中 (chunk_dir)
+            """
             # Let the local master write data to disk first
             # We could further parallelize the disk writing process by having all of the ranks write data,
             # but it would make determinism trickier
@@ -326,6 +328,7 @@ class Runner:
 
                     metrics, bg_nerf_rays_present = self._training_step(
                         item['rgbs'].to(self.device, non_blocking=True),
+                        item['depths'].to(self.device, non_blocking=True),
                         item['rays'].to(self.device, non_blocking=True),
                         image_indices)
 
@@ -429,7 +432,7 @@ class Runner:
             dist.barrier()
         # end _setup_experiment_dir
 
-    def _training_step(self, rgbs: torch.Tensor, rays: torch.Tensor, image_indices: Optional[torch.Tensor]) \
+    def _training_step(self, rgbs: torch.Tensor, depths: torch.Tensor, rays: torch.Tensor, image_indices: Optional[torch.Tensor]) \
             -> Tuple[Dict[str, Union[torch.Tensor, float]], bool]:
         results, bg_nerf_rays_present = render_rays(nerf=self.nerf,
                                                     bg_nerf=self.bg_nerf,
@@ -438,7 +441,7 @@ class Runner:
                                                     hparams=self.hparams,
                                                     sphere_center=self.sphere_center,
                                                     sphere_radius=self.sphere_radius,
-                                                    get_depth=False,
+                                                    get_depth=True,
                                                     get_depth_variance=True,
                                                     get_bg_fg_rgb=False)
         typ = 'fine' if 'rgb_fine' in results else 'coarse'
@@ -453,8 +456,10 @@ class Runner:
         }
 
         photo_loss = F.mse_loss(results[f'rgb_{typ}'], rgbs, reduction='mean')
+        depth_loss = F.mse_loss(results[f'depth_{typ}'], depths, reduction='mean')
         metrics['photo_loss'] = photo_loss
-        metrics['loss'] = photo_loss
+        metrics['depth_mse_loss'] = depth_loss
+        metrics['loss'] = photo_loss + depth_loss
 
         if self.hparams.use_cascade and typ != 'coarse':
             coarse_loss = F.mse_loss(results['rgb_coarse'], rgbs, reduction='mean')
