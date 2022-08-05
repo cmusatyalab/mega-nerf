@@ -135,3 +135,4 @@ dmypy.json
 datasets/
 exp/
 parscripts/*-*.txt
+chunk*/

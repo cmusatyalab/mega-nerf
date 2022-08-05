@@ -3,6 +3,9 @@ from argparse import Namespace
 import torch
 from torch.distributed.elastic.multiprocessing.errors import record
 
+import sys
+from pathlib import Path
+sys.path.append(str(Path.cwd()))
 from mega_nerf.opts import get_opts_base
 from mega_nerf.runner import Runner
 

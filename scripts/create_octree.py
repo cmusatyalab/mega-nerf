@@ -32,6 +32,8 @@ from svox.helpers import _get_c_extension
 from torch import nn
 from tqdm import tqdm
 
+import sys
+sys.path.append(str(Path.cwd()))
 from mega_nerf.models.model_utils import get_nerf
 from mega_nerf.opts import get_opts_base
 

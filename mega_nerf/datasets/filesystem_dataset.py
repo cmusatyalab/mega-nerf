@@ -204,7 +204,7 @@ class FilesystemDataset(Dataset):
 
                 for i in range(3):
                     dtypes.append(('rgbs_{}'.format(i), pa.uint8()))
-                dtypes.append(('depths', pa.uint8()))
+                dtypes.append(('depths', pa.float32()))
 
                 if self._directions is not None:
                     dtypes.append(('pixel_indices', pa.int32()))

@@ -456,7 +456,7 @@ class Runner:
         }
 
         photo_loss = F.mse_loss(results[f'rgb_{typ}'], rgbs, reduction='mean')
-        depth_loss = F.mse_loss(results[f'depth_{typ}'], depths, reduction='mean')
+        depth_loss = F.mse_loss(results[f'depth_{typ}'].view(-1, 1), depths.view(-1, 1), reduction='mean')
         metrics['photo_loss'] = photo_loss
         metrics['depth_mse_loss'] = depth_loss
         metrics['loss'] = photo_loss + depth_loss

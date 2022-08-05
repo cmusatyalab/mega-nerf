@@ -47,7 +47,7 @@ class ImageMetadata:
         if size[0] != self.W or size[1] != self.H:
             depths = depths.resize((self.W, self.H), Image.LANCZOS)
         
-        return torch.ByteTensor(np.asarray(depths))
+        return torch.FloatTensor(np.asarray(depths)) / 255
 
     def load_mask(self) -> Optional[torch.Tensor]:
         """
