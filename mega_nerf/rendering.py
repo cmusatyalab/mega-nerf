@@ -5,6 +5,7 @@ from typing import Optional, Dict, Callable, Tuple
 import torch
 import torch.nn.functional as F
 from torch import nn
+from mega_nerf.datasets.sdf_utils import sdf2weight
 
 from mega_nerf.spherical_harmonics import eval_sh
 
@@ -394,9 +395,10 @@ def _inference(results: Dict[str, torch.Tensor],
     if get_bg_lambda:
         results[f'bg_lambda_{typ}'] = T[..., -1]
 
-    T = torch.cat((torch.ones_like(T[..., 0:1]), T[..., :-1]), dim=-1)  # [..., N_samples]
+    # T = torch.cat((torch.ones_like(T[..., 0:1]), T[..., :-1]), dim=-1)  # [..., N_samples]
 
-    weights = alphas * T  # (N_rays, N_samples_)
+    # weights = alphas * T  # (N_rays, N_samples_)
+    weights = sdf2weight(z_vals, sigmas)
 
     if get_weights:
         results[f'weights_{typ}'] = weights
