@@ -1,12 +1,12 @@
 import os
 from argparse import Namespace
+from pathlib import Path
 from typing import Optional, Dict, Callable, Tuple
 
 import torch
 import torch.nn.functional as F
 from torch import nn
-from mega_nerf.datasets.sdf_utils import sdf2weight
-
+from mega_nerf.sdf_utils import sdf2weight
 from mega_nerf.spherical_harmonics import eval_sh
 
 TO_COMPOSITE = {'rgb', 'depth'}
@@ -403,12 +403,12 @@ def _inference(results: Dict[str, torch.Tensor],
     if get_weights:
         results[f'weights_{typ}'] = weights
 
+    results[f'zvals_{typ}'] = z_vals
+    results[f'raw_sigma_{typ}'] = sigmas
     if composite_rgb:
         results[f'rgb_{typ}'] = (weights.unsqueeze(-1) * rgbs).sum(dim=1)  # n1 n2 c -> n1 c
     else:
-        results[f'zvals_{typ}'] = z_vals
         results[f'raw_rgb_{typ}'] = rgbs
-        results[f'raw_sigma_{typ}'] = sigmas
         if depth_real is not None:
             results[f'depth_real_{typ}'] = depth_real
 

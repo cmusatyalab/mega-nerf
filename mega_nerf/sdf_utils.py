@@ -27,7 +27,8 @@ def get_gt_sdf_masks(z_vals, gt_depth, truncation):
                             torch.ones_like(z_vals),
                             torch.zeros_like(z_vals))
     # sdf region
-    sdf_mask = (1.0 - front_mask) * (1.0 - back_mask)
+    sdf_mask = (1.0 - front_mask)
+    sdf_mask *= (1.0 - back_mask)
     return front_mask, back_mask, sdf_mask
 
 def get_gt_sdf(z_vals, gt_depth, truncation, front_mask, back_mask, sdf_mask):
@@ -87,3 +88,27 @@ def sdf2weight(z_vals, sdf, truncation=0.05):
 
     weights = weights * mask
     return weights / (torch.sum(weights, axis=-1, keepdims=True) + 1e-8)
+
+def get_sdf_loss(z_vals, predicted_sdf, gt_depth, truncation=0.05):
+    """
+    calculate SDF losses, consists of two parts:
+    1. freespace sdf loss, includes before/after truncation region
+    2. truncation loss
+    in this function, we first compute masks for the truncation region
+    and compute losses respectively
+
+    Inputs:
+        z_vals: (batch_size, n_samples)
+        predicted_sdf: (batch_size, n_samples)
+        gt_depth: (batch_size, 1)
+    """
+    mse = lambda x, y: torch.mean((x - y) ** 2)
+    gt_depth = gt_depth[:, None]
+    front_mask, back_mask, sdf_mask = get_gt_sdf_masks(z_vals, gt_depth, truncation)
+    front_samples = torch.count_nonzero(front_mask)
+    sdf_samples = torch.count_nonzero(sdf_mask)
+    
+    gt_sdf = get_gt_sdf(z_vals, gt_depth, truncation, front_mask, back_mask, sdf_mask)
+
+    return mse(predicted_sdf * front_mask, gt_sdf * front_mask) / front_samples, \
+        mse(predicted_sdf * sdf_mask, gt_sdf * sdf_mask) / sdf_samples
