@@ -457,9 +457,9 @@ class Runner:
         }
 
         photo_loss = F.mse_loss(results[f'rgb_{typ}'], rgbs, reduction='mean')
-        depth_loss = F.mse_loss(results[f'depth_{typ}'].view(-1, 1), depths.view(-1, 1), reduction='mean')
+        depth_loss = self.hparams.depth_weight * F.mse_loss(results[f'depth_{typ}'].view(-1, 1), depths.view(-1, 1), reduction='mean')
         fs_loss, tr_loss = get_sdf_loss(results[f'zvals_{typ}'], results[f'raw_sigma_{typ}'], depths)
-        sdf_loss = fs_loss + tr_loss
+        sdf_loss = (fs_loss + tr_loss) * self.hparams.sdf_weight
         metrics['photo_loss'] = photo_loss
         metrics['depth_mse_loss'] = depth_loss
         metrics['sdf_loss'] = sdf_loss
@@ -499,7 +499,7 @@ class Runner:
                 for i in main_tqdm(indices_to_eval):
                     metadata_item = self.val_items[i]
                     viz_rgbs = metadata_item.load_image().float() / 255.
-                    viz_gt_depths = metadata_item.load_depth_images().float()
+                    viz_gt_depths = metadata_item.load_depth_image().float()
 
                     results, _ = self.render_image(metadata_item)
                     typ = 'fine' if 'rgb_fine' in results else 'coarse'
@@ -567,6 +567,7 @@ class Runner:
                                                               results[f'bg_rgb_{typ}'].view(viz_rgbs.shape[0],
                                                                                             viz_rgbs.shape[1],
                                                                                             3).cpu(),
+                                                              viz_gt_depths,
                                                               results[f'bg_depth_{typ}'])
 
                             if self.writer is not None:
@@ -578,6 +579,7 @@ class Runner:
                                                               results[f'fg_rgb_{typ}'].view(viz_rgbs.shape[0],
                                                                                             viz_rgbs.shape[1],
                                                                                             3).cpu(),
+                                                              viz_gt_depths,
                                                               results[f'fg_depth_{typ}'])
 
                             if self.writer is not None:
@@ -687,9 +689,10 @@ class Runner:
     def _create_result_image(rgbs: torch.Tensor, result_rgbs: torch.Tensor, gt_depth: torch.Tensor
                             , result_depths: torch.Tensor) -> Image:
         depth_vis = Runner.visualize_scalars(torch.log(result_depths + 1e-8).view(rgbs.shape[0], rgbs.shape[1]).cpu())
+        gt_depth_vis = Runner.visualize_scalars(torch.log(gt_depth + 1e-8).view(rgbs.shape[0], rgbs.shape[1]).cpu())
         images = (rgbs * 255, result_rgbs * 255)
-        depth = (gt_depth, depth_vis)
-        ret = np.concatenate([np.concatenate(images, axis=2), np.concatenate(depth, axis=2)], axis=1).astype(np.uint8)
+        depth = (gt_depth_vis, depth_vis)
+        ret = np.concatenate([np.concatenate(images, axis=1), np.concatenate(depth, axis=1)], axis=0).astype(np.uint8)
         return Image.fromarray(ret)
 
     @staticmethod
