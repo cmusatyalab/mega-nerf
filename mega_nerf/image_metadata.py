@@ -47,7 +47,8 @@ class ImageMetadata:
         if size[0] != self.W or size[1] != self.H:
             depths = depths.resize((self.W, self.H), Image.LANCZOS)
         
-        return torch.FloatTensor(np.asarray(depths)) / 255
+        # 不知道欸什么读入的深度图是倒过来的, 这里做一下处理
+        return torch.FloatTensor(np.asarray(depths)).flip(0) / 255
 
     def load_mask(self) -> Optional[torch.Tensor]:
         """
