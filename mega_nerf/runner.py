@@ -32,6 +32,7 @@ from mega_nerf.datasets.memory_dataset import MemoryDataset
 from mega_nerf.image_metadata import ImageMetadata
 from mega_nerf.metrics import psnr, ssim, lpips
 from mega_nerf.misc_utils import main_print, main_tqdm
+from mega_nerf.models import sdf_network
 from mega_nerf.models.model_utils import get_nerf, get_bg_nerf
 from mega_nerf.ray_utils import get_rays, get_ray_directions
 from mega_nerf.rendering import render_rays
@@ -711,6 +712,8 @@ class Runner:
 
             for i in range(0, rays.shape[0], self.hparams.image_pixel_batch_size):
                 result_batch, _ = render_rays(nerf=nerf, bg_nerf=bg_nerf,
+                                              sdf_network=self.sdf_network,
+                                              single_variance_network=self.single_variance_network,
                                               rays=rays[i:i + self.hparams.image_pixel_batch_size],
                                               image_indices=image_indices[
                                                             i:i + self.hparams.image_pixel_batch_size] if self.hparams.appearance_dim > 0 else None,
@@ -719,7 +722,8 @@ class Runner:
                                               sphere_radius=self.sphere_radius,
                                               get_depth=True,
                                               get_depth_variance=False,
-                                              get_bg_fg_rgb=True)
+                                              get_bg_fg_rgb=True,
+                                              neus_mode=True)
 
                 for key, value in result_batch.items():
                     if key not in results:
