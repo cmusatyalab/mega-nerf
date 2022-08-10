@@ -1,7 +1,6 @@
 import os
 from argparse import Namespace
 from pathlib import Path
-from this import d
 from typing import Optional, Dict, Callable, Tuple
 
 import torch
