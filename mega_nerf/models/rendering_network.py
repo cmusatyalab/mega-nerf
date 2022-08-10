@@ -26,7 +26,7 @@ class RenderingNetwork(nn.Module):
         if multires_view > 0:
             # embedview_fn, input_ch = get_embedder(multires_view)
             embedview_fn = Embedding(multires_view)
-            input_ch = embedview_fn.get_out_channels(d_in)
+            input_ch = embedview_fn.get_out_channels()
             self.embedview_fn = embedview_fn
             dims[0] += (input_ch - 3)
 

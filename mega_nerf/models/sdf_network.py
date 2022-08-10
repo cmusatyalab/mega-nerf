@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+import numpy as np
 
 from mega_nerf.models.nerf import Embedding
 

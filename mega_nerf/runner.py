@@ -185,7 +185,7 @@ class Runner:
                                          weight_norm=hparams.weight_norm,
                                          multires_view=hparams.rendernet_multires,
                                          squeeze_out=True,
-            )
+            ).to(self.device)
             self.sdf_network = SDFNetwork(d_in=3,
                                           d_out=1 + hparams.layer_dim,
                                           d_hidden=hparams.layer_dim,
@@ -196,8 +196,8 @@ class Runner:
                                           scale=hparams.sdf_scale,
                                           geometric_init=hparams.geometric_init,
                                           weight_norm=hparams.weight_norm,
-                                          )
-            self.single_variance_network = SingleVarianceNetwork(init_val=hparams.sv_init_val)
+                                          ).to(self.device)
+            self.single_variance_network = SingleVarianceNetwork(init_val=hparams.sv_init_val).to(self.device)
             if 'RANK' in os.environ:
                 self.nerf = torch.nn.parallel.DistributedDataParallel(self.nerf,
                                                                       device_ids=[int(os.environ['LOCAL_RANK'])],
@@ -489,7 +489,7 @@ class Runner:
                                                     get_depth=True,
                                                     get_depth_variance=True,
                                                     get_bg_fg_rgb=False,
-                                                    neus_mode=self.neus_mode,
+                                                    neus_mode=self.hparams.neus_mode,
                                                     cos_anneal_ratio=self.get_cos_anneal_ratio()
                                                     )
         typ = 'fine' if 'rgb_fine' in results else 'coarse'
@@ -504,13 +504,13 @@ class Runner:
         }
 
         photo_loss = F.mse_loss(results[f'rgb_{typ}'], rgbs, reduction='mean') * self.hparams.photo_weight
-        depth_loss = self.hparams.depth_weight * F.mse_loss(results[f'depth_{typ}'].view(-1, 1), depths.view(-1, 1), reduction='mean')
-        fs_loss, tr_loss = get_sdf_loss(results[f'zvals_{typ}'], results[f'raw_sigma_{typ}'], depths)
-        sdf_loss = (fs_loss + tr_loss) * self.hparams.sdf_weight
+        # depth_loss = self.hparams.depth_weight * F.mse_loss(results[f'depth_{typ}'].view(-1, 1), depths.view(-1, 1), reduction='mean')
+        # fs_loss, tr_loss = get_sdf_loss(results[f'zvals_{typ}'], results[f'raw_sigma_{typ}'], depths)
+        # sdf_loss = (fs_loss + tr_loss) * self.hparams.sdf_weight
         metrics['photo_loss'] = photo_loss
-        metrics['depth_mse_loss'] = depth_loss
-        metrics['sdf_loss'] = sdf_loss
-        metrics['loss'] = photo_loss + depth_loss + sdf_loss
+        # metrics['depth_mse_loss'] = depth_loss
+        # metrics['sdf_loss'] = sdf_loss
+        metrics['loss'] = photo_loss  # + depth_loss + sdf_loss
 
         if self.hparams.use_cascade and typ != 'coarse' and not self.hparams.neus_mode:
             coarse_loss = F.mse_loss(results['rgb_coarse'], rgbs, reduction='mean')

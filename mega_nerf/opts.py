@@ -106,12 +106,12 @@ def get_opts_base():
     parser.add_argument('--sdf_weight', type=float, default=1e8, help='weight of sdf loss')
 
     # NeuS
-    parser.add_argument('--neus_mode', type=bool, default=False, action="store_true", dest='neus_mode')
+    parser.add_argument('--neus_mode', default=False, action="store_true", dest='neus_mode')
     parser.add_argument('--sdf_multires', type=int, default=6)
     parser.add_argument('--sdf_bias', type=float, default=0.5)
     parser.add_argument('--sdf_scale', type=float, default=3.0)
-    parser.add_argument('--no_geometric_init', type=bool, default=True, dest='geometric_init', action='store_false')
-    parser.add_argument('--no_weight_norm', type=bool, default=True, dest='weight_norm', action='store_false')
+    parser.add_argument('--no_geometric_init', default=True, dest='geometric_init', action='store_false')
+    parser.add_argument('--no_weight_norm', default=True, dest='weight_norm', action='store_false')
     parser.add_argument('--sv_init_val', type=float, default=0.3)
     parser.add_argument('--bg_samples', type=int, default=32)
     parser.add_argument('--up_sample_steps', type=int, default=4)
