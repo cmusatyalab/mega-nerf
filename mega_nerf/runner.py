@@ -547,97 +547,99 @@ class Runner:
                 indices_to_eval = np.arange(len(self.val_items))
 
             for i in main_tqdm(indices_to_eval):
-                metadata_item = self.val_items[i]
-                viz_rgbs = metadata_item.load_image().float() / 255.
-                viz_gt_depths = metadata_item.load_depth_image().float()
+                with torch.no_grad():
+                    metadata_item = self.val_items[i]
+                    viz_rgbs = metadata_item.load_image().float() / 255.
+                    viz_gt_depths = metadata_item.load_depth_image().float()
 
                 results, _ = self.render_image(metadata_item)
-                typ = 'fine' if 'rgb_fine' in results else 'coarse'
-                viz_result_rgbs = results[f'rgb_{typ}'].view(*viz_rgbs.shape).cpu()
+                with torch.inference_mode():
+                    typ = 'fine' if 'rgb_fine' in results else 'coarse'
+                    viz_result_rgbs = results[f'rgb_{typ}'].view(*viz_rgbs.shape).cpu()
 
-                eval_rgbs = viz_rgbs[:, viz_rgbs.shape[1] // 2:].contiguous()
-                eval_result_rgbs = viz_result_rgbs[:, viz_rgbs.shape[1] // 2:].contiguous()
+                    eval_rgbs = viz_rgbs[:, viz_rgbs.shape[1] // 2:].contiguous()
+                    eval_result_rgbs = viz_result_rgbs[:, viz_rgbs.shape[1] // 2:].contiguous()
 
-                val_psnr = psnr(eval_result_rgbs.view(-1, 3), eval_rgbs.view(-1, 3))
+                    val_psnr = psnr(eval_result_rgbs.view(-1, 3), eval_rgbs.view(-1, 3))
 
-                metric_key = 'val/psnr/{}'.format(i)
-                if self.writer is not None:
-                    self.writer.add_scalar(metric_key, val_psnr, train_index)
-                else:
-                    torch.save({'value': val_psnr, 'metric_key': metric_key, 'agg_key': 'val/psnr'},
-                                metric_path / 'psnr-{}.pt'.format(i))
-
-                val_metrics['val/psnr'] += val_psnr
-
-                val_ssim = ssim(eval_result_rgbs.view(*eval_rgbs.shape), eval_rgbs, 1)
-
-                metric_key = 'val/ssim/{}'.format(i)
-                if self.writer is not None:
-                    self.writer.add_scalar(metric_key, val_ssim, train_index)
-                else:
-                    torch.save({'value': val_ssim, 'metric_key': metric_key, 'agg_key': 'val/ssim'},
-                                metric_path / 'ssim-{}.pt'.format(i))
-
-                val_metrics['val/ssim'] += val_ssim
-
-                val_lpips_metrics = lpips(eval_result_rgbs.view(*eval_rgbs.shape), eval_rgbs)
-
-                for network in val_lpips_metrics:
-                    agg_key = 'val/lpips/{}'.format(network)
-                    metric_key = '{}/{}'.format(agg_key, i)
+                    metric_key = 'val/psnr/{}'.format(i)
                     if self.writer is not None:
-                        self.writer.add_scalar(metric_key, val_lpips_metrics[network], train_index)
+                        self.writer.add_scalar(metric_key, val_psnr, train_index)
                     else:
-                        torch.save(
-                            {'value': val_lpips_metrics[network], 'metric_key': metric_key, 'agg_key': agg_key},
-                            metric_path / 'lpips-{}-{}.pt'.format(network, i))
+                        torch.save({'value': val_psnr, 'metric_key': metric_key, 'agg_key': 'val/psnr'},
+                                    metric_path / 'psnr-{}.pt'.format(i))
 
-                    val_metrics[agg_key] += val_lpips_metrics[network]
+                    val_metrics['val/psnr'] += val_psnr
 
-                viz_result_rgbs = viz_result_rgbs.view(viz_rgbs.shape[0], viz_rgbs.shape[1], 3).cpu()
-                viz_depth = results[f'depth_{typ}']
-                if f'fg_depth_{typ}' in results:
-                    to_use = results[f'fg_depth_{typ}'].view(-1)
-                    while to_use.shape[0] > 2 ** 24:
-                        to_use = to_use[::2]
-                    ma = torch.quantile(to_use, 0.95)
+                    val_ssim = ssim(eval_result_rgbs.view(*eval_rgbs.shape), eval_rgbs, 1)
 
-                    viz_depth = viz_depth.clamp_max(ma)
+                    metric_key = 'val/ssim/{}'.format(i)
+                    if self.writer is not None:
+                        self.writer.add_scalar(metric_key, val_ssim, train_index)
+                    else:
+                        torch.save({'value': val_ssim, 'metric_key': metric_key, 'agg_key': 'val/ssim'},
+                                    metric_path / 'ssim-{}.pt'.format(i))
 
-                img = Runner._create_result_image(viz_rgbs, viz_result_rgbs, viz_gt_depths, viz_depth)
+                    val_metrics['val/ssim'] += val_ssim
 
-                if self.writer is not None:
-                    self.writer.add_image('val/{}'.format(i), T.ToTensor()(img), train_index)
-                else:
-                    img.save(str(image_path / '{}.jpg'.format(i)))
+                    val_lpips_metrics = lpips(eval_result_rgbs.view(*eval_rgbs.shape), eval_rgbs)
 
-                if self.hparams.bg_nerf:
-                    if f'bg_rgb_{typ}' in results:
-                        img = Runner._create_result_image(viz_rgbs,
-                                                            results[f'bg_rgb_{typ}'].view(viz_rgbs.shape[0],
-                                                                                        viz_rgbs.shape[1],
-                                                                                        3).cpu(),
-                                                            viz_gt_depths,
-                                                            results[f'bg_depth_{typ}'])
-
+                    for network in val_lpips_metrics:
+                        agg_key = 'val/lpips/{}'.format(network)
+                        metric_key = '{}/{}'.format(agg_key, i)
                         if self.writer is not None:
-                            self.writer.add_image('val/{}_bg'.format(i), T.ToTensor()(img), train_index)
+                            self.writer.add_scalar(metric_key, val_lpips_metrics[network], train_index)
                         else:
-                            img.save(str(image_path / '{}_bg.jpg'.format(i)))
+                            torch.save(
+                                {'value': val_lpips_metrics[network], 'metric_key': metric_key, 'agg_key': agg_key},
+                                metric_path / 'lpips-{}-{}.pt'.format(network, i))
 
-                        img = Runner._create_result_image(viz_rgbs,
-                                                            results[f'fg_rgb_{typ}'].view(viz_rgbs.shape[0],
-                                                                                        viz_rgbs.shape[1],
-                                                                                        3).cpu(),
-                                                            viz_gt_depths,
-                                                            results[f'fg_depth_{typ}'])
+                        val_metrics[agg_key] += val_lpips_metrics[network]
 
-                        if self.writer is not None:
-                            self.writer.add_image('val/{}_fg'.format(i), T.ToTensor()(img), train_index)
-                        else:
-                            img.save(str(image_path / '{}_fg.jpg'.format(i)))
+                    viz_result_rgbs = viz_result_rgbs.view(viz_rgbs.shape[0], viz_rgbs.shape[1], 3).cpu()
+                    viz_depth = results[f'depth_{typ}']
+                    if f'fg_depth_{typ}' in results:
+                        to_use = results[f'fg_depth_{typ}'].view(-1)
+                        while to_use.shape[0] > 2 ** 24:
+                            to_use = to_use[::2]
+                        ma = torch.quantile(to_use, 0.95)
 
-                del results
+                        viz_depth = viz_depth.clamp_max(ma)
+
+                    img = Runner._create_result_image(viz_rgbs, viz_result_rgbs, viz_gt_depths, viz_depth)
+
+                    if self.writer is not None:
+                        self.writer.add_image('val/{}'.format(i), T.ToTensor()(img), train_index)
+                    else:
+                        img.save(str(image_path / '{}.jpg'.format(i)))
+
+                    if self.hparams.bg_nerf:
+                        if f'bg_rgb_{typ}' in results:
+                            img = Runner._create_result_image(viz_rgbs,
+                                                                results[f'bg_rgb_{typ}'].view(viz_rgbs.shape[0],
+                                                                                            viz_rgbs.shape[1],
+                                                                                            3).cpu(),
+                                                                viz_gt_depths,
+                                                                results[f'bg_depth_{typ}'])
+
+                            if self.writer is not None:
+                                self.writer.add_image('val/{}_bg'.format(i), T.ToTensor()(img), train_index)
+                            else:
+                                img.save(str(image_path / '{}_bg.jpg'.format(i)))
+
+                            img = Runner._create_result_image(viz_rgbs,
+                                                                results[f'fg_rgb_{typ}'].view(viz_rgbs.shape[0],
+                                                                                            viz_rgbs.shape[1],
+                                                                                            3).cpu(),
+                                                                viz_gt_depths,
+                                                                results[f'fg_depth_{typ}'])
+
+                            if self.writer is not None:
+                                self.writer.add_image('val/{}_fg'.format(i), T.ToTensor()(img), train_index)
+                            else:
+                                img.save(str(image_path / '{}_fg.jpg'.format(i)))
+
+                    del results
 
             if 'RANK' in os.environ:
                 dist.barrier()
@@ -685,14 +687,15 @@ class Runner:
         torch.save(dict, self.model_path / '{}.pt'.format(train_index))
 
     def render_image(self, metadata: ImageMetadata) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
-        directions = get_ray_directions(metadata.W,
-                                        metadata.H,
-                                        metadata.intrinsics[0],
-                                        metadata.intrinsics[1],
-                                        metadata.intrinsics[2],
-                                        metadata.intrinsics[3],
-                                        self.hparams.center_pixels,
-                                        self.device)
+        with torch.no_grad():
+            directions = get_ray_directions(metadata.W,
+                                            metadata.H,
+                                            metadata.intrinsics[0],
+                                            metadata.intrinsics[1],
+                                            metadata.intrinsics[2],
+                                            metadata.intrinsics[3],
+                                            self.hparams.center_pixels,
+                                            self.device)
 
         with torch.cuda.amp.autocast(enabled=self.hparams.amp):
             rays = get_rays(directions, metadata.c2w.to(self.device), self.near, self.far, self.ray_altitude_range)
@@ -727,11 +730,14 @@ class Runner:
                                               get_bg_fg_rgb=True,
                                               neus_mode=self.hparams.neus_mode)
 
-                for key, value in result_batch.items():
-                    if key not in results:
-                        results[key] = []
+                with torch.no_grad():
+                    for key, value in result_batch.items():
+                        if key not in results:
+                            results[key] = []
 
-                    results[key].append(value.cpu())
+                        results[key].append(value.cpu())
+                del result_batch
+                torch.cuda.empty_cache()
 
             for key, value in results.items():
                 results[key] = torch.cat(value)
