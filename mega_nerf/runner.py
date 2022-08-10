@@ -456,7 +456,7 @@ class Runner:
             'depth_variance': depth_variance,
         }
 
-        photo_loss = F.mse_loss(results[f'rgb_{typ}'], rgbs, reduction='mean')
+        photo_loss = F.mse_loss(results[f'rgb_{typ}'], rgbs, reduction='mean') * self.hparams.photo_weight
         depth_loss = self.hparams.depth_weight * F.mse_loss(results[f'depth_{typ}'].view(-1, 1), depths.view(-1, 1), reduction='mean')
         fs_loss, tr_loss = get_sdf_loss(results[f'zvals_{typ}'], results[f'raw_sigma_{typ}'], depths)
         sdf_loss = (fs_loss + tr_loss) * self.hparams.sdf_weight

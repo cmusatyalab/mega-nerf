@@ -6,5 +6,6 @@ coarse_samples: 256
 fine_samples: 512
 pos_dir_dim: 8
 batch_size: 256
-depth_weight: 1.0
-sdf_weight: 1e8
+photo_weight: 10.0
+depth_weight: 0.01
+sdf_weight: 1e6

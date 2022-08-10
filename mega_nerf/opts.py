@@ -100,6 +100,7 @@ def get_opts_base():
     parser.add_argument('--detect_anomalies', default=False, action='store_true')
     parser.add_argument('--random_seed', type=int, default=42)
 
+    parser.add_argument('--photo_weight', type=float, default=1.0, help='weight of photo loss')
     parser.add_argument('--depth_weight', type=float, default=1.0, help='weight for depth loss')
     parser.add_argument('--sdf_weight', type=float, default=1e8, help='weight of sdf loss')
 
