@@ -1,0 +1,23 @@
+ray_altitude_range: [-5, 55]
+val_interval: 1000
+ckpt_interval: 3000
+no_ellipse_bounds: True
+coarse_samples: 256
+fine_samples: 512
+pos_dir_dim: 8
+batch_size: 256
+neus_mode: True
+sdf_multires: 6
+sdf_bias: 0.5
+sdf_scale: 1.0
+geometric_init: True
+weight_norm: True
+sv_init_val: 0.3
+bg_samples: 32
+up_sample_steps: 4
+rendernet_d_in: 9
+rendernet_d_out: 3
+rendernet_d_hidden: 256
+rendernet_n_layers: 4
+rendernet_multires: 4
+anneal_end: 50000

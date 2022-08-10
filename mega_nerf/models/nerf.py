@@ -17,6 +17,9 @@ class Embedding(nn.Module):
         else:
             self.freq_bands = torch.linspace(1, 2 ** (num_freqs - 1), num_freqs)
 
+    def get_out_channels(self, d_in=3):
+        return (len(self.freq_bands) * 2 + 1) * d_in
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         out = [x]
         for freq in self.freq_bands:

@@ -3,12 +3,14 @@ import faulthandler
 import math
 import os
 import random
+from readline import insert_text
 import shutil
 import signal
 import sys
 from argparse import Namespace
 from collections import defaultdict
 from pathlib import Path
+from this import d
 from typing import Tuple, List, Optional, Dict, Union
 
 import cv2
@@ -34,6 +36,9 @@ from mega_nerf.models.model_utils import get_nerf, get_bg_nerf
 from mega_nerf.ray_utils import get_rays, get_ray_directions
 from mega_nerf.rendering import render_rays
 from mega_nerf.sdf_utils import get_sdf_loss
+from mega_nerf.models.sdf_network import SDFNetwork
+from mega_nerf.models.single_variance import SingleVarianceNetwork
+from mega_nerf.models.rendering_network import RenderingNetwork
 
 
 class Runner:
@@ -170,6 +175,40 @@ class Runner:
         if 'RANK' in os.environ:
             self.nerf = torch.nn.parallel.DistributedDataParallel(self.nerf, device_ids=[int(os.environ['LOCAL_RANK'])],
                                                                   output_device=int(os.environ['LOCAL_RANK']))
+        if hparams.neus_mode:
+            self.nerf = RenderingNetwork(d_feature=256,
+                                         mode='idr',
+                                         d_in=hparams.rendernet_d_in,
+                                         d_out=hparams.rendernet_d_out,
+                                         d_hidden=hparams.rendernet_d_hidden,   
+                                         n_layers=hparams.rendernet_n_layers,
+                                         weight_norm=hparams.weight_norm,
+                                         multires_view=hparams.rendernet_multires,
+                                         squeeze_out=True,
+            )
+            self.sdf_network = SDFNetwork(d_in=3,
+                                          d_out=1 + hparams.layer_dim,
+                                          d_hidden=hparams.layer_dim,
+                                          n_layers=hparams.layers,
+                                          skip_in=(4,),
+                                          multires=hparams.sdf_multires,
+                                          bias=hparams.sdf_bias,
+                                          scale=hparams.sdf_scale,
+                                          geometric_init=hparams.geometric_init,
+                                          weight_norm=hparams.weight_norm,
+                                          )
+            self.single_variance_network = SingleVarianceNetwork(init_val=hparams.sv_init_val)
+            if 'RANK' in os.environ:
+                self.nerf = torch.nn.parallel.DistributedDataParallel(self.nerf,
+                                                                      device_ids=[int(os.environ['LOCAL_RANK'])],
+                                                                      output_device=int(os.environ['LOCAL_RANK']))
+                self.sdf_network = torch.nn.parallel.DistributedDataParallel(self.sdf_network,
+                                                                            device_ids=[int(os.environ['LOCAL_RANK'])],
+                                                                            output_device=int(os.environ['LOCAL_RANK']))
+                self.single_variance_network = torch.nn.parallel.DistributedDataParallel(self.single_variance_network,
+                                                                                        device_ids=[int(os.environ['LOCAL_RANK'])],
+                                                                                        output_device=int(os.environ['LOCAL_RANK']))
+
 
         if hparams.bg_nerf:
             """
@@ -263,6 +302,8 @@ class Runner:
             schedulers[key] = ExponentialLR(optimizer,
                                             gamma=self.hparams.lr_decay_factor ** (1 / self.hparams.train_iterations),
                                             last_epoch=train_iterations - 1)
+        self.anneal_end = self.hparams.anneal_end
+        self.iter_step = -1
 
         """
         加载数据集
@@ -435,8 +476,11 @@ class Runner:
 
     def _training_step(self, rgbs: torch.Tensor, depths: torch.Tensor, rays: torch.Tensor, image_indices: Optional[torch.Tensor]) \
             -> Tuple[Dict[str, Union[torch.Tensor, float]], bool]:
+        self.iter_step += 1
         results, bg_nerf_rays_present = render_rays(nerf=self.nerf,
                                                     bg_nerf=self.bg_nerf,
+                                                    sdf_network=self.sdf_network,
+                                                    single_variance_network=self.single_variance_network,
                                                     rays=rays,
                                                     image_indices=image_indices,
                                                     hparams=self.hparams,
@@ -444,7 +488,10 @@ class Runner:
                                                     sphere_radius=self.sphere_radius,
                                                     get_depth=True,
                                                     get_depth_variance=True,
-                                                    get_bg_fg_rgb=False)
+                                                    get_bg_fg_rgb=False,
+                                                    neus_mode=self.neus_mode,
+                                                    cos_anneal_ratio=self.get_cos_anneal_ratio()
+                                                    )
         typ = 'fine' if 'rgb_fine' in results else 'coarse'
 
         with torch.no_grad():
@@ -465,7 +512,7 @@ class Runner:
         metrics['sdf_loss'] = sdf_loss
         metrics['loss'] = photo_loss + depth_loss + sdf_loss
 
-        if self.hparams.use_cascade and typ != 'coarse':
+        if self.hparams.use_cascade and typ != 'coarse' and not self.hparams.neus_mode:
             coarse_loss = F.mse_loss(results['rgb_coarse'], rgbs, reduction='mean')
 
             metrics['coarse_loss'] = coarse_loss
@@ -827,3 +874,9 @@ class Runner:
         version = 0 if len(existing_versions) == 0 else max(existing_versions) + 1
         experiment_path = exp_dir / str(version)
         return experiment_path
+
+    def get_cos_anneal_ratio(self,):
+        if self.anneal_end == 0.0:
+            return 1.0
+        else:
+            return np.min([1.0, self.iter_step / self.anneal_end])
