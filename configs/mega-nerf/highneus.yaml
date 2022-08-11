@@ -1,5 +1,5 @@
 ray_altitude_range: [-5, 55]
-val_interval: 100
+val_interval: 3000
 ckpt_interval: 3000
 no_ellipse_bounds: True
 coarse_samples: 128
@@ -21,6 +21,6 @@ rendernet_multires: 4
 anneal_end: 50000
 appearance_dim: 0
 photo_weight: 1.
-depth_weight: 0
-eikonal_weight: 1.
+depth_weight: 0.
+eikonal_weight: .1
 val_scale_factor: 10

@@ -1,5 +1,6 @@
 import datetime
 import faulthandler
+from logging import warning
 import math
 import os
 import random
@@ -380,11 +381,14 @@ class Runner:
                                 continue
 
                             if not math.isfinite(val):
-                                raise Exception('Train metrics not finite: {}'.format(metrics))
+                                warning('Train metrics not finite: {}'.format(metrics))
+                                break
 
                 for optimizer in optimizers.values():
                     optimizer.zero_grad(set_to_none=True)
 
+                if not math.isfinite(metrics['loss']):
+                    continue
                 scaler.scale(metrics['loss']).backward()
 
                 for key, optimizer in optimizers.items():
@@ -611,7 +615,7 @@ class Runner:
 
                         viz_depth = viz_depth.clamp_max(ma)
 
-                    img = Runner._create_result_image(viz_rgbs, viz_result_rgbs, viz_gt_depths, viz_depth)
+                    img = Runner._create_result_image(viz_rgbs, viz_result_rgbs, viz_gt_depths, viz_depth, results['gradient_fine'], results['weights_fine'])
 
                     save_path = self.experiment_path / 'valimg' / f'val-{self.iter_step}'
                     if not os.path.exists(save_path):
@@ -755,11 +759,13 @@ class Runner:
 
     @staticmethod
     def _create_result_image(rgbs: torch.Tensor, result_rgbs: torch.Tensor, gt_depth: torch.Tensor
-                            , result_depths: torch.Tensor) -> Image:
+                            , result_depths: torch.Tensor, gradient: torch.Tensor, weight: torch.Tensor) -> Image:
         depth_vis = Runner.visualize_scalars(torch.log(result_depths + 1e-8).view(rgbs.shape[0], rgbs.shape[1]).cpu())
         gt_depth_vis = Runner.visualize_scalars(torch.log(gt_depth + 1e-8).view(rgbs.shape[0], rgbs.shape[1]).cpu())
+        out_normal = gradient * weight[:, : (gradient.shape[1]), None]
+        out_normal = out_normal.sum(dim=1).detach().cpu().numpy().reshape(rgbs.shape)
         images = (rgbs * 255, result_rgbs * 255)
-        depth = (gt_depth_vis, depth_vis)
+        depth = (out_normal, depth_vis)
         ret = np.concatenate([np.concatenate(images, axis=1), np.concatenate(depth, axis=1)], axis=0).astype(np.uint8)
         return Image.fromarray(ret)
 
