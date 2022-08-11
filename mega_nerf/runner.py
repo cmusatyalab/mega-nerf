@@ -504,13 +504,15 @@ class Runner:
         }
 
         photo_loss = F.mse_loss(results[f'rgb_{typ}'], rgbs, reduction='mean') * self.hparams.photo_weight
-        # depth_loss = self.hparams.depth_weight * F.mse_loss(results[f'depth_{typ}'].view(-1, 1), depths.view(-1, 1), reduction='mean')
         # fs_loss, tr_loss = get_sdf_loss(results[f'zvals_{typ}'], results[f'raw_sigma_{typ}'], depths)
         # sdf_loss = (fs_loss + tr_loss) * self.hparams.sdf_weight
+        eikonal_loss = results['gradient_error'] * self.hparams.eikonal_weight
+        depth_loss = self.hparams.depth_weight * F.mse_loss(results[f'depth_{typ}'].view(-1, 1), depths.view(-1, 1), reduction='mean')
         metrics['photo_loss'] = photo_loss
-        # metrics['depth_mse_loss'] = depth_loss
+        metrics['eikonal_loss'] = eikonal_loss
+        metrics['depth_mse_loss'] = depth_loss
         # metrics['sdf_loss'] = sdf_loss
-        metrics['loss'] = photo_loss  # + depth_loss + sdf_loss
+        metrics['loss'] = photo_loss  + depth_loss + eikonal_loss
 
         if self.hparams.use_cascade and typ != 'coarse' and not self.hparams.neus_mode:
             coarse_loss = F.mse_loss(results['rgb_coarse'], rgbs, reduction='mean')
@@ -543,8 +545,11 @@ class Runner:
                     metric_path.mkdir()
                     image_path.mkdir()
                 dist.barrier()
+                
             else:
                 indices_to_eval = np.arange(len(self.val_items))
+                image_path = self.experiment_path / 'valimg'
+                image_path.mkdir(exist_ok=True)
 
             for i in main_tqdm(indices_to_eval):
                 with torch.no_grad():
@@ -608,10 +613,12 @@ class Runner:
 
                     img = Runner._create_result_image(viz_rgbs, viz_result_rgbs, viz_gt_depths, viz_depth)
 
+                    save_path = self.experiment_path / 'valimg' / f'val-{self.iter_step}'
+                    if not os.path.exists(save_path):
+                        save_path.mkdir()
+                    img.save(str(save_path / '{}.jpg'.format(i)))
                     if self.writer is not None:
                         self.writer.add_image('val/{}'.format(i), T.ToTensor()(img), train_index)
-                    else:
-                        img.save(str(image_path / '{}.jpg'.format(i)))
 
                     if self.hparams.bg_nerf:
                         if f'bg_rgb_{typ}' in results:
@@ -740,6 +747,8 @@ class Runner:
                 torch.cuda.empty_cache()
 
             for key, value in results.items():
+                if key in ['gradient_error']:
+                    continue
                 results[key] = torch.cat(value)
 
             return results, rays

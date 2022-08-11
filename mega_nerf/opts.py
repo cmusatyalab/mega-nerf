@@ -103,7 +103,7 @@ def get_opts_base():
     # Neural RGB-D
     parser.add_argument('--photo_weight', type=float, default=1.0, help='weight of photo loss')
     parser.add_argument('--depth_weight', type=float, default=1.0, help='weight for depth loss')
-    parser.add_argument('--sdf_weight', type=float, default=1e8, help='weight of sdf loss')
+    parser.add_argument('--eikonal_weight', type=float, default=1.0, help='weight of eikonal loss')
 
     # NeuS
     parser.add_argument('--neus_mode', default=False, action="store_true", dest='neus_mode')

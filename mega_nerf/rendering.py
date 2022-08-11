@@ -332,6 +332,7 @@ def neus_render_rays(rendering_network: nn.Module,
         'weights_fine': ret_fine['weights'],
         'depth_fine': depth,
         'depth_variance_fine': depth_variance,
+        'gradient_error': ret_fine['gradient_error'],
     }, True
 
 
