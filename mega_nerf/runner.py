@@ -512,15 +512,15 @@ class Runner:
             photo_loss = F.l1_loss(results['rgb_fine'], rgbs, reduction='mean') * self.hparams.photo_weight
         else:
             photo_loss = F.mse_loss(results[f'rgb_{typ}'], rgbs, reduction='mean') * self.hparams.photo_weight
-        # fs_loss, tr_loss = get_sdf_loss(results[f'zvals_{typ}'], results[f'raw_sigma_{typ}'], depths)
-        # sdf_loss = (fs_loss + tr_loss) * self.hparams.sdf_weight
+        fs_loss, tr_loss = get_sdf_loss(results[f'zvals_{typ}'], results[f'raw_sigma_{typ}'].reshape(results[f'zvals_{typ}'].shape), depths)
+        sdf_loss = (tr_loss) * self.hparams.sdf_weight
         eikonal_loss = results['gradient_error'] * self.hparams.eikonal_weight
-        depth_loss = self.hparams.depth_weight * F.mse_loss(results[f'depth_{typ}'].view(-1, 1), depths.view(-1, 1), reduction='mean')
+        depth_loss = F.mse_loss(results[f'depth_{typ}'].view(-1, 1), depths.view(-1, 1), reduction='mean')
         metrics['photo_loss'] = photo_loss
         metrics['eikonal_loss'] = eikonal_loss
         metrics['depth_mse_loss'] = depth_loss
-        # metrics['sdf_loss'] = sdf_loss
-        metrics['loss'] = photo_loss  + depth_loss + eikonal_loss
+        metrics['sdf_loss'] = sdf_loss
+        metrics['loss'] = photo_loss  + depth_loss * self.hparams.depth_weight + eikonal_loss + sdf_loss
 
         if self.hparams.use_cascade and typ != 'coarse' and not self.hparams.neus_mode:
             coarse_loss = F.mse_loss(results['rgb_coarse'], rgbs, reduction='mean')

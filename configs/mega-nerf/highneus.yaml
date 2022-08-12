@@ -22,6 +22,7 @@ anneal_end: 50000
 appearance_dim: 0
 photo_weight: 1.
 depth_weight: 0.
+sdf_weight: 1e8
 eikonal_weight: .1
 val_scale_factor: 10
 lr: 5e-5
