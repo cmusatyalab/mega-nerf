@@ -507,7 +507,10 @@ class Runner:
             'depth_variance': depth_variance,
         }
 
-        photo_loss = F.mse_loss(results[f'rgb_{typ}'], rgbs, reduction='mean') * self.hparams.photo_weight
+        if self.hparams.neus_mode:
+            photo_loss = F.l1_loss(results['rgb_fine'], rgbs, reduction='mean') * self.hparams.photo_weight
+        else:
+            photo_loss = F.mse_loss(results[f'rgb_{typ}'], rgbs, reduction='mean') * self.hparams.photo_weight
         # fs_loss, tr_loss = get_sdf_loss(results[f'zvals_{typ}'], results[f'raw_sigma_{typ}'], depths)
         # sdf_loss = (fs_loss + tr_loss) * self.hparams.sdf_weight
         eikonal_loss = results['gradient_error'] * self.hparams.eikonal_weight
@@ -763,7 +766,7 @@ class Runner:
         depth_vis = Runner.visualize_scalars(torch.log(result_depths + 1e-8).view(rgbs.shape[0], rgbs.shape[1]).cpu())
         gt_depth_vis = Runner.visualize_scalars(torch.log(gt_depth + 1e-8).view(rgbs.shape[0], rgbs.shape[1]).cpu())
         out_normal = gradient * weight[:, : (gradient.shape[1]), None]
-        out_normal = out_normal.sum(dim=1).detach().cpu().numpy().reshape(rgbs.shape)
+        out_normal = out_normal.sum(dim=1).detach().cpu().numpy().reshape(rgbs.shape) * 255
         images = (rgbs * 255, result_rgbs * 255)
         depth = (out_normal, depth_vis)
         ret = np.concatenate([np.concatenate(images, axis=1), np.concatenate(depth, axis=1)], axis=0).astype(np.uint8)

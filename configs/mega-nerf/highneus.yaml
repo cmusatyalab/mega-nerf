@@ -7,7 +7,7 @@ fine_samples: 128
 pos_dir_dim: 8
 batch_size: 128
 neus_mode: True
-sdf_multires: 6
+sdf_multires: 10
 sdf_bias: 0.5
 sdf_scale: 1.0
 sv_init_val: 0.3
@@ -24,3 +24,4 @@ photo_weight: 1.
 depth_weight: 0.
 eikonal_weight: .1
 val_scale_factor: 10
+lr: 5e-5
