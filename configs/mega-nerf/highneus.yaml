@@ -2,10 +2,10 @@ ray_altitude_range: [-5, 55]
 val_interval: 3000
 ckpt_interval: 3000
 no_ellipse_bounds: True
-coarse_samples: 128
-fine_samples: 128
+coarse_samples: 64
+fine_samples: 64
 pos_dir_dim: 8
-batch_size: 128
+batch_size: 512
 neus_mode: True
 sdf_multires: 10
 sdf_bias: 0.5
@@ -25,3 +25,4 @@ depth_weight: 0.
 eikonal_weight: .1
 val_scale_factor: 10
 lr: 5e-5
+no_amp: True

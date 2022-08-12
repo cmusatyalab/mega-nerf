@@ -339,6 +339,7 @@ class Runner:
         else:
             pbar = None
 
+        torch.set_default_dtype(torch.float32)
         while train_iterations < self.hparams.train_iterations:
             # If discard_index >= 0, we already set to the right chunk through set_state
             if self.hparams.dataset_type == 'filesystem' and discard_index == -1:
