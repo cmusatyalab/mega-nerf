@@ -125,7 +125,8 @@ class NeRF(nn.Module):
             raise Exception(
                 'Unexpected input shape: {} (expected: {}, xyz_dim: {})'.format(x.shape, expected, self.xyz_dim))
 
-        input_xyz = self.embedding_xyz(x[:, :self.xyz_dim])
+        gradient_x = x[:, :self.xyz_dim].requires_grad_()
+        input_xyz = self.embedding_xyz(gradient_x)
         xyz_ = input_xyz
         for i, xyz_encoding in enumerate(self.xyz_encodings):
             if i in self.skip_layers:
@@ -139,7 +140,16 @@ class NeRF(nn.Module):
         sigma = self.sigma_activation(sigma)
 
         if sigma_only:
-            return sigma
+            return sigma, None
+
+        gradient = torch.autograd.grad(
+            outputs = sigma,
+            inputs = gradient_x,
+            grad_outputs = torch.ones_like(sigma, requires_grad=False, device=sigma.device),
+            create_graph = True,
+            retain_graph = True,
+            only_inputs = True
+        )[0]
 
         if self.xyz_encoding_final is not None:
             xyz_encoding_final = self.xyz_encoding_final(xyz_)
@@ -160,4 +170,4 @@ class NeRF(nn.Module):
             affine_transform = self.affine(self.embedding_a(x[:, -1].long())).view(-1, 3, 4)
             rgb = (affine_transform[:, :, :3] @ rgb.unsqueeze(-1) + affine_transform[:, :, 3:]).squeeze(-1)
 
-        return torch.cat([self.rgb_activation(rgb) if self.rgb_activation is not None else rgb, sigma], -1)
+        return torch.cat([self.rgb_activation(rgb) if self.rgb_activation is not None else rgb, sigma], -1), gradient

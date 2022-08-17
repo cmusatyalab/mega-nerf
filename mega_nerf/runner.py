@@ -176,17 +176,8 @@ class Runner:
         if 'RANK' in os.environ:
             self.nerf = torch.nn.parallel.DistributedDataParallel(self.nerf, device_ids=[int(os.environ['LOCAL_RANK'])],
                                                                   output_device=int(os.environ['LOCAL_RANK']))
+        self.sdf_network, self.single_variance_network = None, None
         if hparams.neus_mode:
-            self.nerf = RenderingNetwork(d_feature=256,
-                                         mode='idr',
-                                         d_in=hparams.rendernet_d_in,
-                                         d_out=hparams.rendernet_d_out,
-                                         d_hidden=hparams.rendernet_d_hidden,   
-                                         n_layers=hparams.rendernet_n_layers,
-                                         weight_norm=hparams.weight_norm,
-                                         multires_view=hparams.rendernet_multires,
-                                         squeeze_out=True,
-            ).to(self.device)
             self.sdf_network = SDFNetwork(d_in=3,
                                           d_out=1 + hparams.layer_dim,
                                           d_hidden=hparams.layer_dim,
@@ -509,18 +500,21 @@ class Runner:
         }
 
         if self.hparams.neus_mode:
-            photo_loss = F.l1_loss(results['rgb_fine'], rgbs, reduction='mean') * self.hparams.photo_weight
+            photo_loss = F.l1_loss(results[f'rgb_{typ}'], rgbs, reduction='mean') * self.hparams.photo_weight
+            eikonal_loss = results[f'gradient_error_{typ}'] * self.hparams.eikonal_weight
+            metrics['eikonal_loss'] = eikonal_loss
+            # fs_loss, tr_loss = get_sdf_loss(results[f'zvals_{typ}'], results[f'raw_sigma_{typ}'].reshape(results[f'zvals_{typ}'].shape), depths)
+            # sdf_loss = (tr_loss) * self.hparams.sdf_weight
+            # metrics['sdf_loss'] = sdf_loss
+            extra_loss = eikonal_loss
         else:
             photo_loss = F.mse_loss(results[f'rgb_{typ}'], rgbs, reduction='mean') * self.hparams.photo_weight
-        fs_loss, tr_loss = get_sdf_loss(results[f'zvals_{typ}'], results[f'raw_sigma_{typ}'].reshape(results[f'zvals_{typ}'].shape), depths)
-        sdf_loss = (tr_loss) * self.hparams.sdf_weight
-        eikonal_loss = results['gradient_error'] * self.hparams.eikonal_weight
+            extra_loss = 0
+
         depth_loss = F.mse_loss(results[f'depth_{typ}'].view(-1, 1), depths.view(-1, 1), reduction='mean')
         metrics['photo_loss'] = photo_loss
-        metrics['eikonal_loss'] = eikonal_loss
         metrics['depth_mse_loss'] = depth_loss
-        metrics['sdf_loss'] = sdf_loss
-        metrics['loss'] = photo_loss  + depth_loss * self.hparams.depth_weight + eikonal_loss + sdf_loss
+        metrics['loss'] = photo_loss  + depth_loss * self.hparams.depth_weight + extra_loss
 
         if self.hparams.use_cascade and typ != 'coarse' and not self.hparams.neus_mode:
             coarse_loss = F.mse_loss(results['rgb_coarse'], rgbs, reduction='mean')
@@ -565,7 +559,8 @@ class Runner:
                     viz_rgbs = metadata_item.load_image().float() / 255.
                     viz_gt_depths = metadata_item.load_depth_image().float()
 
-                results, _ = self.render_image(metadata_item)
+                with torch.inference_mode(mode=not self.hparams.neus_mode):
+                    results, _ = self.render_image(metadata_item)
                 with torch.inference_mode():
                     typ = 'fine' if 'rgb_fine' in results else 'coarse'
                     viz_result_rgbs = results[f'rgb_{typ}'].view(*viz_rgbs.shape).cpu()
@@ -619,7 +614,11 @@ class Runner:
 
                         viz_depth = viz_depth.clamp_max(ma)
 
-                    img = Runner._create_result_image(viz_rgbs, viz_result_rgbs, viz_gt_depths, viz_depth, results['gradient_fine'], results['weights_fine'])
+                    if self.hparams.neus_mode:
+                        img = Runner._create_result_image(viz_rgbs, viz_result_rgbs, viz_gt_depths, viz_depth, results['gradient_fine'], results['weights_fine'])
+                    else:
+                        img = Runner._create_result_image(viz_rgbs, viz_result_rgbs, viz_gt_depths, viz_depth, None, None)
+
 
                     save_path = self.experiment_path / 'valimg' / f'val-{self.iter_step}'
                     if not os.path.exists(save_path):
@@ -635,7 +634,7 @@ class Runner:
                                                                                             viz_rgbs.shape[1],
                                                                                             3).cpu(),
                                                                 viz_gt_depths,
-                                                                results[f'bg_depth_{typ}'])
+                                                                results[f'bg_depth_{typ}'], None, None)
 
                             if self.writer is not None:
                                 self.writer.add_image('val/{}_bg'.format(i), T.ToTensor()(img), train_index)
@@ -647,7 +646,7 @@ class Runner:
                                                                                             viz_rgbs.shape[1],
                                                                                             3).cpu(),
                                                                 viz_gt_depths,
-                                                                results[f'fg_depth_{typ}'])
+                                                                results[f'fg_depth_{typ}'], None, None)
 
                             if self.writer is not None:
                                 self.writer.add_image('val/{}_fg'.format(i), T.ToTensor()(img), train_index)
@@ -766,10 +765,13 @@ class Runner:
                             , result_depths: torch.Tensor, gradient: torch.Tensor, weight: torch.Tensor) -> Image:
         depth_vis = Runner.visualize_scalars(torch.log(result_depths + 1e-8).view(rgbs.shape[0], rgbs.shape[1]).cpu())
         gt_depth_vis = Runner.visualize_scalars(torch.log(gt_depth + 1e-8).view(rgbs.shape[0], rgbs.shape[1]).cpu())
-        out_normal = gradient * weight[:, : (gradient.shape[1]), None]
-        out_normal = out_normal.sum(dim=1).detach().cpu().numpy().reshape(rgbs.shape) * 255
+        if gradient is not None:
+            out_normal = gradient * weight[:, : (gradient.shape[1]), None]
+            out_normal = out_normal.sum(dim=1).detach().cpu().numpy().reshape(rgbs.shape) * 255
+            depth = (out_normal, depth_vis)
+        else:
+            depth = (gt_depth_vis, depth_vis)
         images = (rgbs * 255, result_rgbs * 255)
-        depth = (out_normal, depth_vis)
         ret = np.concatenate([np.concatenate(images, axis=1), np.concatenate(depth, axis=1)], axis=0).astype(np.uint8)
         return Image.fromarray(ret)
 

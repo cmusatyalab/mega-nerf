@@ -1,3 +1,4 @@
+from operator import inv
 import os
 from argparse import Namespace
 from pathlib import Path
@@ -376,7 +377,7 @@ def render_rays(nerf: nn.Module,
     """
     if neus_mode:
         assert sphere_center is None and sphere_radius is None
-        return neus_render_rays(nerf, bg_nerf, sdf_network, single_variance_network, rays, image_indices, hparams, get_depth, get_depth_variance, get_bg_fg_rgb, cos_anneal_ratio=cos_anneal_ratio)
+        # return neus_render_rays(nerf, bg_nerf, sdf_network, single_variance_network, rays, image_indices, hparams, get_depth, get_depth_variance, get_bg_fg_rgb, cos_anneal_ratio=cos_anneal_ratio)
     N_rays = rays.shape[0]
 
     rays_o, rays_d = rays[:, 0:3], rays[:, 3:6]  # both (N_rays, 3)
@@ -422,6 +423,7 @@ def render_rays(nerf: nn.Module,
                                                     cluster_2d)
 
             bg_results = _get_results(nerf=bg_nerf,
+                                      deviation_net=single_variance_network,
                                       rays_d=rays_d[rays_with_bg],
                                       image_indices=image_indices[rays_with_bg] if image_indices is not None else None,
                                       hparams=hparams,
@@ -438,7 +440,10 @@ def render_rays(nerf: nn.Module,
                                                                                          fine_z_vals,
                                                                                          sphere_center, sphere_radius,
                                                                                          include_xyz_real,
-                                                                                         cluster_2d))
+                                                                                         cluster_2d),
+                                      neus_mode=neus_mode,
+                                      cos_anneal_ratio=cos_anneal_ratio,
+                                      )
 
     else:
         rays_o = rays_o.view(rays_o.shape[0], 1, rays_o.shape[1])
@@ -452,6 +457,7 @@ def render_rays(nerf: nn.Module,
 
     xyz_coarse = rays_o + rays_d * z_vals.unsqueeze(-1)
     results = _get_results(nerf=nerf,
+                           deviation_net=single_variance_network,
                            rays_d=rays_d,
                            image_indices=image_indices,
                            hparams=hparams,
@@ -463,7 +469,10 @@ def render_rays(nerf: nn.Module,
                            get_bg_lambda=bg_nerf is not None,
                            flip=False,
                            depth_real=None,
-                           xyz_fine_fn=lambda fine_z_vals: (rays_o + rays_d * fine_z_vals.unsqueeze(-1), None))
+                           xyz_fine_fn=lambda fine_z_vals: (rays_o + rays_d * fine_z_vals.unsqueeze(-1), None),
+                           neus_mode=neus_mode,
+                           cos_anneal_ratio=cos_anneal_ratio,
+                           )
 
     if bg_nerf is not None:
         types = ['fine' if hparams.fine_samples > 0 else 'coarse']
@@ -516,6 +525,7 @@ def render_rays(nerf: nn.Module,
         bg_pts, depth_real = _depth2pts_outside(rays_o[:1], rays_d[:1], bg_z_vals,
                                                 sphere_center, sphere_radius, include_xyz_real, cluster_2d)
         grad_results = _get_results(nerf=bg_nerf,
+                                    deviation_net=single_variance_network,
                                     rays_d=rays_d[:1],
                                     image_indices=image_indices[:1] if image_indices is not None else None,
                                     hparams=hparams,
@@ -532,7 +542,10 @@ def render_rays(nerf: nn.Module,
                                                                                        fine_z_vals,
                                                                                        sphere_center, sphere_radius,
                                                                                        include_xyz_real,
-                                                                                       cluster_2d))
+                                                                                       cluster_2d),
+                                    neus_mode=neus_mode,
+                                    cos_anneal_ratio=cos_anneal_ratio,
+                                    )
         results[f'rgb_{types[0]}'][:0] += 0 * grad_results[f'rgb_{types[0]}']
         bg_nerf_rays_present = True
 
@@ -540,6 +553,7 @@ def render_rays(nerf: nn.Module,
 
 
 def _get_results(nerf: nn.Module,
+                 deviation_net: nn.Module,
                  rays_d: torch.Tensor,
                  image_indices: Optional[torch.Tensor],
                  hparams: Namespace,
@@ -551,7 +565,10 @@ def _get_results(nerf: nn.Module,
                  get_bg_lambda: bool,
                  flip: bool,
                  depth_real: Optional[torch.Tensor],
-                 xyz_fine_fn: Callable[[torch.Tensor], Tuple[torch.Tensor, Optional[torch.Tensor]]]) \
+                 xyz_fine_fn: Callable[[torch.Tensor], Tuple[torch.Tensor, Optional[torch.Tensor]]],
+                 neus_mode: bool,
+                 cos_anneal_ratio: float,
+                 ) \
         -> Dict[str, torch.Tensor]:
     results = {}
 
@@ -561,6 +578,7 @@ def _get_results(nerf: nn.Module,
     _inference(results=results,
                typ='coarse',
                nerf=nerf,
+               deviation_net=deviation_net,
                rays_d=rays_d,
                image_indices=image_indices,
                hparams=hparams,
@@ -573,7 +591,10 @@ def _get_results(nerf: nn.Module,
                get_weights=hparams.fine_samples > 0,
                get_bg_lambda=get_bg_lambda and hparams.use_cascade,
                flip=flip,
-               depth_real=depth_real)
+               depth_real=depth_real,
+               neus_mode=neus_mode,
+               cos_anneal_ratio=cos_anneal_ratio,
+               )
 
     if hparams.fine_samples > 0:  # sample points for fine model
         z_vals_mid = 0.5 * (z_vals[:, :-1] + z_vals[:, 1:])  # (N_rays, N_samples-1) interval mid points
@@ -593,6 +614,7 @@ def _get_results(nerf: nn.Module,
         _inference(results=results,
                    typ='fine',
                    nerf=nerf,
+                   deviation_net=deviation_net,
                    rays_d=rays_d,
                    image_indices=image_indices,
                    hparams=hparams,
@@ -605,7 +627,10 @@ def _get_results(nerf: nn.Module,
                    get_weights=False,
                    get_bg_lambda=get_bg_lambda,
                    flip=flip,
-                   depth_real=depth_real_fine)
+                   depth_real=depth_real_fine,
+                   neus_mode=neus_mode,
+                   cos_anneal_ratio=cos_anneal_ratio,
+                   )
 
         for key in INTERMEDIATE_KEYS:
             if key in results:
@@ -617,6 +642,7 @@ def _get_results(nerf: nn.Module,
 def _inference(results: Dict[str, torch.Tensor],
                typ: str,
                nerf: nn.Module,
+               deviation_net: nn.Module,
                rays_d: torch.Tensor,
                image_indices: Optional[torch.Tensor],
                hparams: Namespace,
@@ -629,7 +655,10 @@ def _inference(results: Dict[str, torch.Tensor],
                get_weights: bool,
                get_bg_lambda: bool,
                flip: bool,
-               depth_real: Optional[torch.Tensor]):
+               depth_real: Optional[torch.Tensor],
+               neus_mode: bool,
+               cos_anneal_ratio: float,
+               ):
     N_rays_ = xyz.shape[0]
     N_samples_ = xyz.shape[1]
 
@@ -643,6 +672,7 @@ def _inference(results: Dict[str, torch.Tensor],
     # Perform model inference to get rgb and raw sigma
     B = xyz_.shape[0]
     out_chunks = []
+    out_gradients = []
     rays_d_ = rays_d.repeat(1, N_samples_, 1).view(-1, rays_d.shape[-1])
 
     if image_indices is not None:
@@ -660,9 +690,9 @@ def _inference(results: Dict[str, torch.Tensor],
             sigma_noise = torch.rand(len(xyz_chunk), 1, device=xyz_chunk.device) if nerf.training else None
 
             if hparams.use_cascade:
-                model_chunk = nerf(typ == 'coarse', xyz_chunk, sigma_noise=sigma_noise)
+                model_chunk, gradient = nerf(typ == 'coarse', xyz_chunk, sigma_noise=sigma_noise)
             else:
-                model_chunk = nerf(xyz_chunk, sigma_noise=sigma_noise)
+                model_chunk, gradient = nerf(xyz_chunk, sigma_noise=sigma_noise)
 
             if hparams.sh_deg is not None:
                 rgb = torch.sigmoid(
@@ -672,6 +702,7 @@ def _inference(results: Dict[str, torch.Tensor],
                 out_chunks += [torch.cat([rgb, model_chunk[:, rgb_dim:]], -1)]
             else:
                 out_chunks += [model_chunk]
+            out_gradients += [gradient]
     else:
         # (N_rays*N_samples_, embed_dir_channels)
         for i in range(0, B, hparams.model_chunk_size):
@@ -687,14 +718,17 @@ def _inference(results: Dict[str, torch.Tensor],
             sigma_noise = torch.rand(len(xyz_chunk), 1, device=xyz_chunk.device) if nerf.training else None
 
             if hparams.use_cascade:
-                model_chunk = nerf(typ == 'coarse', xyz_chunk, sigma_noise=sigma_noise)
+                model_chunk, gradient = nerf(typ == 'coarse', xyz_chunk, sigma_noise=sigma_noise)
             else:
-                model_chunk = nerf(xyz_chunk, sigma_noise=sigma_noise)
+                model_chunk, gradient = nerf(xyz_chunk, sigma_noise=sigma_noise)
 
             out_chunks += [model_chunk]
+            out_gradients += [gradient]
 
     out = torch.cat(out_chunks, 0)
     out = out.view(N_rays_, N_samples_, out.shape[-1])
+    gradients = torch.cat(out_gradients, 0)
+    gradients = gradients.view(N_rays_, N_samples_, 3)
 
     rgbs = out[..., :3]  # (N_rays, N_samples_, 3)
     sigmas = out[..., 3]  # (N_rays, N_samples_)
@@ -702,14 +736,19 @@ def _inference(results: Dict[str, torch.Tensor],
     if 'zvals_coarse' in results:
         # combine coarse and fine samples
         z_vals, ordering = torch.sort(torch.cat([z_vals, results['zvals_coarse']], -1), -1, descending=flip)
+        coarse_gradient = results['gradient_coarse'].view(N_rays_, N_samples_, 3)
         rgbs = torch.cat((
-            torch.gather(torch.cat((rgbs[..., 0], results['raw_rgb_coarse'][..., 0]), 1), 1, ordering).unsqueeze(
-                -1),
-            torch.gather(torch.cat((rgbs[..., 1], results['raw_rgb_coarse'][..., 1]), 1), 1, ordering).unsqueeze(
-                -1),
-            torch.gather(torch.cat((rgbs[..., 2], results['raw_rgb_coarse'][..., 2]), 1), 1, ordering).unsqueeze(-1)
-        ), -1)
+            torch.gather(torch.cat((rgbs[..., 0], results['raw_rgb_coarse'][..., 0]), 1), 1, ordering).unsqueeze( -1),
+            torch.gather(torch.cat((rgbs[..., 1], results['raw_rgb_coarse'][..., 1]), 1), 1, ordering).unsqueeze( -1),
+            torch.gather(torch.cat((rgbs[..., 2], results['raw_rgb_coarse'][..., 2]), 1), 1, ordering).unsqueeze(-1))
+            , -1)
         sigmas = torch.gather(torch.cat((sigmas, results['raw_sigma_coarse']), 1), 1, ordering)
+        gradients = torch.cat((
+            torch.gather(torch.cat((gradients[..., 0], coarse_gradient[..., 0]), 1), 1, ordering).unsqueeze(-1),
+            torch.gather(torch.cat((gradients[..., 1], coarse_gradient[..., 1]), 1), 1, ordering).unsqueeze(-1),
+            torch.gather(torch.cat((gradients[..., 2], coarse_gradient[..., 2]), 1), 1, ordering).unsqueeze(-1),
+        ), -1)
+        N_samples_ = gradients.shape[1]
 
         if depth_real is not None:
             depth_real = torch.gather(torch.cat((depth_real, results['depth_real_coarse']), 1), 1,
@@ -722,16 +761,44 @@ def _inference(results: Dict[str, torch.Tensor],
         deltas = z_vals[:, 1:] - z_vals[:, :-1]  # (N_rays, N_samples_-1)
 
     deltas = torch.cat([deltas, last_delta], -1)  # (N_rays, N_samples_)
-    alphas = 1 - torch.exp(-deltas * sigmas)  # (N_rays, N_samples_)
+    if neus_mode:
+        gradients = gradients.squeeze().reshape(-1, 3)
+        inv_s = deviation_net(torch.zeros([1, 3]))[:, :1].clip(1e-6, 1e6)
+        inv_s = inv_s.expand(N_rays_ * N_samples_, 1).to(gradients.device)
+        dirs = rays_d.expand(N_rays_, N_samples_, 3).reshape(-1, 3)
+        true_cos = (dirs * gradients).sum(-1, keepdim=True)
+
+        # "cos_anneal_ratio" grows from 0 to 1 in the beginning training iterations. The anneal strategy below makes
+        # the cos value "not dead" at the beginning training iterations, for better convergence.
+        iter_cos = -(F.relu(-true_cos * 0.5 + 0.5) * (1.0 - cos_anneal_ratio) +
+                     F.relu(-true_cos) * cos_anneal_ratio)  # always non-positive
+
+        # Estimate signed distances at section points
+        estimated_next_sdf = sigmas.reshape(-1, 1) + iter_cos * deltas.reshape(-1, 1) * 0.5
+        estimated_prev_sdf = sigmas.reshape(-1, 1) - iter_cos * deltas.reshape(-1, 1) * 0.5
+
+        prev_cdf = torch.sigmoid(estimated_prev_sdf * inv_s)
+        next_cdf = torch.sigmoid(estimated_next_sdf * inv_s)
+
+        p = prev_cdf - next_cdf
+        c = prev_cdf
+
+        alphas = ((p + 1e-5) / (c + 1e-5)).reshape(N_rays_, N_samples_).clip(0.0, 1.0)
+        results[f'gradient_{typ}'] = gradients
+
+        gradient_error = (torch.linalg.norm(gradients.reshape(N_rays_, N_samples_, 3), ord=2, dim=-1) - 1.0) ** 2
+        results[f'gradient_error_{typ}'] = gradient_error.mean()
+    else:
+        alphas = 1 - torch.exp(-deltas * sigmas)  # (N_rays, N_samples_)
 
     T = torch.cumprod(1 - alphas + 1e-8, -1)
     if get_bg_lambda:
         results[f'bg_lambda_{typ}'] = T[..., -1]
 
-    # T = torch.cat((torch.ones_like(T[..., 0:1]), T[..., :-1]), dim=-1)  # [..., N_samples]
+    T = torch.cat((torch.ones_like(T[..., 0:1]), T[..., :-1]), dim=-1)  # [..., N_samples]
 
-    # weights = alphas * T  # (N_rays, N_samples_)
-    weights = sdf2weight(z_vals, sigmas)
+    weights = alphas * T  # (N_rays, N_samples_)
+    # weights = sdf2weight(z_vals, sigmas)
 
     if get_weights:
         results[f'weights_{typ}'] = weights
