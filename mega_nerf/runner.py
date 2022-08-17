@@ -766,6 +766,7 @@ class Runner:
         depth_vis = Runner.visualize_scalars(torch.log(result_depths + 1e-8).view(rgbs.shape[0], rgbs.shape[1]).cpu())
         gt_depth_vis = Runner.visualize_scalars(torch.log(gt_depth + 1e-8).view(rgbs.shape[0], rgbs.shape[1]).cpu())
         if gradient is not None:
+            gradient = gradient.reshape(len(weight), -1, 3)
             out_normal = gradient * weight[:, : (gradient.shape[1]), None]
             out_normal = out_normal.sum(dim=1).detach().cpu().numpy().reshape(rgbs.shape) * 255
             depth = (out_normal, depth_vis)

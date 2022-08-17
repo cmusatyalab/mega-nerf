@@ -736,7 +736,7 @@ def _inference(results: Dict[str, torch.Tensor],
     if 'zvals_coarse' in results:
         # combine coarse and fine samples
         z_vals, ordering = torch.sort(torch.cat([z_vals, results['zvals_coarse']], -1), -1, descending=flip)
-        coarse_gradient = results['gradient_coarse'].view(N_rays_, N_samples_, 3)
+        coarse_gradient = results['gradient_coarse'].view(N_rays_, -1, 3)
         rgbs = torch.cat((
             torch.gather(torch.cat((rgbs[..., 0], results['raw_rgb_coarse'][..., 0]), 1), 1, ordering).unsqueeze( -1),
             torch.gather(torch.cat((rgbs[..., 1], results['raw_rgb_coarse'][..., 1]), 1), 1, ordering).unsqueeze( -1),
