@@ -754,7 +754,7 @@ class Runner:
                 torch.cuda.empty_cache()
 
             for key, value in results.items():
-                if key in ['gradient_error']:
+                if key in ['gradient_error_coarse', 'gradient_error_fine']:
                     continue
                 results[key] = torch.cat(value)
 
