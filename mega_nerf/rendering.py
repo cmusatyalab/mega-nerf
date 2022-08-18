@@ -202,7 +202,7 @@ def neus_render_rays(rendering_network: nn.Module,
         pts = pts.reshape(-1, 3 + int(hparams.bg_samples > 0))
         dirs = dirs.reshape(-1, 3)
 
-        out = nerf(torch.cat([pts, dirs], -1))
+        out = nerf(torch.cat([pts, dirs], -1), neus_mode=True)
         sampled_color = out[:, :-1]
         density = out[:, -1:]
         sampled_color = torch.sigmoid(sampled_color)
@@ -624,7 +624,7 @@ def _get_results(nerf: nn.Module,
                    composite_rgb=True,
                    get_depth=get_depth,
                    get_depth_variance=get_depth_variance,
-                   get_weights=neus_mode,
+                   get_weights=True,
                    get_bg_lambda=get_bg_lambda,
                    flip=flip,
                    depth_real=depth_real_fine,
@@ -659,6 +659,7 @@ def _inference(results: Dict[str, torch.Tensor],
                neus_mode: bool,
                cos_anneal_ratio: float,
                ):
+    depth_real = None
     N_rays_ = xyz.shape[0]
     N_samples_ = xyz.shape[1]
 
@@ -690,9 +691,9 @@ def _inference(results: Dict[str, torch.Tensor],
             sigma_noise = torch.rand(len(xyz_chunk), 1, device=xyz_chunk.device) if nerf.training else None
 
             if hparams.use_cascade:
-                model_chunk, gradient = nerf(typ == 'coarse', xyz_chunk, sigma_noise=sigma_noise)
+                model_chunk, gradient = nerf(typ == 'coarse', xyz_chunk, sigma_noise=sigma_noise, neus_mode=neus_mode)
             else:
-                model_chunk, gradient = nerf(xyz_chunk, sigma_noise=sigma_noise)
+                model_chunk, gradient = nerf(xyz_chunk, sigma_noise=sigma_noise, neus_mode=neus_mode)
 
             if hparams.sh_deg is not None:
                 rgb = torch.sigmoid(
@@ -718,17 +719,18 @@ def _inference(results: Dict[str, torch.Tensor],
             sigma_noise = torch.rand(len(xyz_chunk), 1, device=xyz_chunk.device) if nerf.training else None
 
             if hparams.use_cascade:
-                model_chunk, gradient = nerf(typ == 'coarse', xyz_chunk, sigma_noise=sigma_noise)
+                model_chunk, gradient = nerf(typ == 'coarse', xyz_chunk, sigma_noise=sigma_noise, neus_mode=neus_mode)
             else:
-                model_chunk, gradient = nerf(xyz_chunk, sigma_noise=sigma_noise)
+                model_chunk, gradient = nerf(xyz_chunk, sigma_noise=sigma_noise, neus_mode=neus_mode)
 
             out_chunks += [model_chunk]
             out_gradients += [gradient]
 
     out = torch.cat(out_chunks, 0)
     out = out.view(N_rays_, N_samples_, out.shape[-1])
-    gradients = torch.cat(out_gradients, 0)
-    gradients = gradients.view(N_rays_, N_samples_, 3)
+    if neus_mode:
+        gradients = torch.cat(out_gradients, 0)
+        gradients = gradients.view(N_rays_, N_samples_, 3)
 
     rgbs = out[..., :3]  # (N_rays, N_samples_, 3)
     sigmas = out[..., 3]  # (N_rays, N_samples_)
@@ -736,19 +738,20 @@ def _inference(results: Dict[str, torch.Tensor],
     if 'zvals_coarse' in results:
         # combine coarse and fine samples
         z_vals, ordering = torch.sort(torch.cat([z_vals, results['zvals_coarse']], -1), -1, descending=flip)
-        coarse_gradient = results['gradient_coarse'].view(N_rays_, -1, 3)
         rgbs = torch.cat((
             torch.gather(torch.cat((rgbs[..., 0], results['raw_rgb_coarse'][..., 0]), 1), 1, ordering).unsqueeze( -1),
             torch.gather(torch.cat((rgbs[..., 1], results['raw_rgb_coarse'][..., 1]), 1), 1, ordering).unsqueeze( -1),
             torch.gather(torch.cat((rgbs[..., 2], results['raw_rgb_coarse'][..., 2]), 1), 1, ordering).unsqueeze(-1))
             , -1)
         sigmas = torch.gather(torch.cat((sigmas, results['raw_sigma_coarse']), 1), 1, ordering)
-        gradients = torch.cat((
-            torch.gather(torch.cat((gradients[..., 0], coarse_gradient[..., 0]), 1), 1, ordering).unsqueeze(-1),
-            torch.gather(torch.cat((gradients[..., 1], coarse_gradient[..., 1]), 1), 1, ordering).unsqueeze(-1),
-            torch.gather(torch.cat((gradients[..., 2], coarse_gradient[..., 2]), 1), 1, ordering).unsqueeze(-1),
-        ), -1)
-        N_samples_ = gradients.shape[1]
+        if neus_mode:
+            coarse_gradient = results['gradient_coarse'].view(N_rays_, -1, 3)
+            gradients = torch.cat((
+                torch.gather(torch.cat((gradients[..., 0], coarse_gradient[..., 0]), 1), 1, ordering).unsqueeze(-1),
+                torch.gather(torch.cat((gradients[..., 1], coarse_gradient[..., 1]), 1), 1, ordering).unsqueeze(-1),
+                torch.gather(torch.cat((gradients[..., 2], coarse_gradient[..., 2]), 1), 1, ordering).unsqueeze(-1),
+            ), -1)
+            N_samples_ = gradients.shape[1]
 
         if depth_real is not None:
             depth_real = torch.gather(torch.cat((depth_real, results['depth_real_coarse']), 1), 1,

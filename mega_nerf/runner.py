@@ -30,7 +30,7 @@ from tqdm import tqdm
 from mega_nerf.datasets.filesystem_dataset import FilesystemDataset
 from mega_nerf.datasets.memory_dataset import MemoryDataset
 from mega_nerf.image_metadata import ImageMetadata
-from mega_nerf.metrics import psnr, ssim, lpips
+from mega_nerf.metrics import depth_abs_rel, depth_delta, depth_rmse, depth_rmse_log, depth_sq_rel, psnr, ssim, lpips
 from mega_nerf.misc_utils import main_print, main_tqdm
 from mega_nerf.models import sdf_network
 from mega_nerf.models.model_utils import get_nerf, get_bg_nerf
@@ -511,6 +511,15 @@ class Runner:
             photo_loss = F.mse_loss(results[f'rgb_{typ}'], rgbs, reduction='mean') * self.hparams.photo_weight
             extra_loss = 0
 
+        metrics += {
+            "train/RMSE": depth_rmse(results[f'depth_{typ}'], depths.view(-1)),
+            "train/RMSE_log": depth_rmse_log(results[f'depth_{typ}'], depths.view(-1)),
+            "train/Abs_Rel": depth_abs_rel(results[f'depth_{typ}'], depths.view(-1)),
+            "train/Sq_Rel": depth_sq_rel(results[f'depth_{typ}'], depths.view(-1)),
+            "train/δ_1": depth_delta(results[f'depth_{typ}'], depths.view(-1), 1),
+            "train/δ_2": depth_delta(results[f'depth_{typ}'], depths.view(-1), 2),
+            "train/δ_3": depth_delta(results[f'depth_{typ}'], depths.view(-1), 3),
+        }                                                      
         depth_loss = F.mse_loss(results[f'depth_{typ}'].view(-1, 1), depths.view(-1, 1), reduction='mean')
         metrics['photo_loss'] = photo_loss
         metrics['depth_mse_loss'] = depth_loss
@@ -603,6 +612,25 @@ class Runner:
                                 metric_path / 'lpips-{}-{}.pt'.format(network, i))
 
                         val_metrics[agg_key] += val_lpips_metrics[network]
+
+                    self.writer.add_histogram('val/weights_dist', results['weights_fine'], global_step=self.iter_step)
+                    depth_metrics = {
+                        "val_depth/RMSE/{}".format(i): depth_rmse(results[f'depth_{typ}'], viz_gt_depths.view(-1)),
+                        "val_depth/RMSE_log/{}".format(i): depth_rmse_log(results[f'depth_{typ}'], viz_gt_depths.view(-1)),
+                        "val_depth/Abs_Rel/{}".format(i): depth_abs_rel(results[f'depth_{typ}'], viz_gt_depths.view(-1)),
+                        "val_depth/Sq_Rel/{}".format(i): depth_sq_rel(results[f'depth_{typ}'], viz_gt_depths.view(-1)),
+                        "val_depth/δ_1/{}".format(i): depth_delta(results[f'depth_{typ}'], viz_gt_depths.view(-1), 1),
+                        "val_depth/δ_2/{}".format(i): depth_delta(results[f'depth_{typ}'], viz_gt_depths.view(-1), 2),
+                        "val_depth/δ_3/{}".format(i): depth_delta(results[f'depth_{typ}'], viz_gt_depths.view(-1), 3),
+                    }
+                    for key, value in depth_metrics.items():
+                        if self.writer is not None:
+                            self.writer.add_scalar(key, value, train_index)
+                        else:
+                            torch.save({'value': value, 'metric_key': key, 'agg_key': key},
+                                       metric_path / 'depth-{}.pt'.format(i))
+
+                        val_metrics[key] += value
 
                     viz_result_rgbs = viz_result_rgbs.view(viz_rgbs.shape[0], viz_rgbs.shape[1], 3).cpu()
                     viz_depth = results[f'depth_{typ}']

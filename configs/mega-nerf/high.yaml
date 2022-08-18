@@ -1,11 +1,10 @@
 ray_altitude_range: [-5, 55]
-val_interval: 1000
-ckpt_interval: 3000
+val_interval: 8000
+ckpt_interval: 8000
 no_ellipse_bounds: True
 coarse_samples: 256
 fine_samples: 512
 pos_dir_dim: 8
 batch_size: 256
 photo_weight: 10.0
-depth_weight: 0.01
-sdf_weight: 1e6
+depth_weight: 1

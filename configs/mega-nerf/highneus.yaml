@@ -5,19 +5,14 @@ no_ellipse_bounds: True
 coarse_samples: 256
 fine_samples: 256
 pos_dir_dim: 8
+pos_xyz_dim: 8
 batch_size: 1024
 neus_mode: True
-sdf_multires: 10
 sdf_bias: 0.5
 sdf_scale: 1.0
 sv_init_val: 0.3
-bg_samples: 32
+bg_samples: 0
 up_sample_steps: 4
-rendernet_d_in: 9
-rendernet_d_out: 3
-rendernet_d_hidden: 256
-rendernet_n_layers: 4
-rendernet_multires: 4
 anneal_end: 50000
 appearance_dim: 0
 photo_weight: 1.
@@ -25,4 +20,4 @@ depth_weight: 1.
 sdf_weight: 1e8
 eikonal_weight: .1
 val_scale_factor: 10
-lr: 5e-5
+lr: 5e-4

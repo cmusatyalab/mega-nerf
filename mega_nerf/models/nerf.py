@@ -116,7 +116,7 @@ class NeRF(nn.Module):
             self.rgb_activation = None  # We're using spherical harmonics and will convert to sigmoid in rendering.py
 
     def forward(self, x: torch.Tensor, sigma_only: bool = False,
-                sigma_noise: Optional[torch.Tensor] = None) -> torch.Tensor:
+                sigma_noise: Optional[torch.Tensor] = None, neus_mode=False) -> torch.Tensor:
         expected = self.xyz_dim \
                    + (0 if (sigma_only or self.embedding_dir is None) else 3) \
                    + (0 if (sigma_only or self.embedding_a is None) else 1)
@@ -142,14 +142,17 @@ class NeRF(nn.Module):
         if sigma_only:
             return sigma, None
 
-        gradient = torch.autograd.grad(
-            outputs = sigma,
-            inputs = gradient_x,
-            grad_outputs = torch.ones_like(sigma, requires_grad=False, device=sigma.device),
-            create_graph = True,
-            retain_graph = True,
-            only_inputs = True
-        )[0]
+        if neus_mode:
+            gradient = torch.autograd.grad(
+                outputs = sigma,
+                inputs = gradient_x,
+                grad_outputs = torch.ones_like(sigma, requires_grad=False, device=sigma.device),
+                create_graph = True,
+                retain_graph = True,
+                only_inputs = True
+            )[0]
+        else:
+            gradient = None
 
         if self.xyz_encoding_final is not None:
             xyz_encoding_final = self.xyz_encoding_final(xyz_)
