@@ -1,16 +1,68 @@
+from configparser import Interpolation
 from pathlib import Path
 from typing import Optional
 from zipfile import ZipFile
 
 import numpy as np
 import torch
+import cv2
 import torch.nn.functional as F
 from PIL import Image
+import re
+
+
+def read_pfm(file):
+    """ Read a pfm file """
+    file = open(file, 'rb')
+
+    color = None
+    width = None
+    height = None
+    scale = None
+    endian = None
+
+    header = file.readline().rstrip()
+    header = str(bytes.decode(header, encoding='utf-8'))
+    if header == 'PF':
+        color = True
+    elif header == 'Pf':
+        color = False
+    else:
+        raise Exception('Not a PFM file.')
+
+    pattern = r'^(\d+)\s(\d+)\s$'
+    temp_str = str(bytes.decode(file.readline(), encoding='utf-8'))
+    dim_match = re.match(pattern, temp_str)
+    if dim_match:
+        width, height = map(int, dim_match.groups())
+    else:
+        temp_str += str(bytes.decode(file.readline(), encoding='utf-8'))
+        dim_match = re.match(pattern, temp_str)
+        if dim_match:
+            width, height = map(int, dim_match.groups())
+        else:
+            raise Exception('Malformed PFM header: width, height cannot be found')
+
+    scale = float(file.readline().rstrip())
+    if scale < 0: # little-endian
+        endian = '<'
+        scale = -scale
+    else:
+        endian = '>' # big-endian
+
+    data = np.fromfile(file, endian + 'f')
+    shape = (height, width, 3) if color else (height, width)
+
+    data = np.reshape(data, shape)
+    # DEY: I don't know why this was there.
+    file.close()
+    
+    return data
 
 
 class ImageMetadata:
     def __init__(self, image_path: Path, depth_path: Path, c2w: torch.Tensor, W: int, H: int, intrinsics: torch.Tensor, image_index: int,
-                 mask_path: Optional[Path], is_val: bool):
+                 mask_path: Optional[Path], is_val: bool, pose_scale_factor):
         self.image_path = image_path
         self.depth_path = depth_path
         self.c2w = c2w
@@ -20,6 +72,7 @@ class ImageMetadata:
         self.image_index = image_index
         self._mask_path = mask_path
         self.is_val = is_val
+        self.pose_scale_factor = pose_scale_factor
 
     def load_image(self) -> torch.Tensor:
         """
@@ -37,18 +90,18 @@ class ImageMetadata:
     
     def load_depth_image(self) -> torch.Tensor:
         """
-        从文件系统中读取深度图片, 并按照 metadata 进行缩放
+        从文件系统中读取深度图片 (PFM), 并按照 metadata 进行缩放
         Returns:
         - torch.Tensor: 深度图片的缩放后的 tensor (self.W, self.H, 1)
         """
-        depths = Image.open(self.depth_path).convert('L')
-        size = depths.size
+        depths = read_pfm(self.depth_path)
+        depths[depths > 150] = 150
+        depths /= self.pose_scale_factor
+        depths = np.ascontiguousarray(depths)
+        if depths.shape[1] != self.W or depths.shape[0] != self.H:
+            depths = cv2.resize(depths, (self.W, self.H), interpolation=cv2.INTER_LANCZOS4)
         
-        if size[0] != self.W or size[1] != self.H:
-            depths = depths.resize((self.W, self.H), Image.LANCZOS)
-        
-        # 不知道欸什么读入的深度图是倒过来的, 这里做一下处理
-        return torch.FloatTensor(np.asarray(depths)).flip(0) / 255
+        return torch.tensor(depths, dtype=torch.float32)
 
     def load_mask(self) -> Optional[torch.Tensor]:
         """

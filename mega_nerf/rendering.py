@@ -815,16 +815,16 @@ def _inference(results: Dict[str, torch.Tensor],
         if depth_real is not None:
             results[f'depth_real_{typ}'] = depth_real
 
+    if get_depth or get_depth_variance:
+        if depth_real is not None:
+            depth_map = (weights * depth_real).sum(dim=1)  # n1 n2 -> n1
+        else:
+            depth_map = (weights * z_vals).sum(dim=1)  # n1 n2 -> n1
+
+    if get_depth:
+        results[f'depth_{typ}'] = depth_map
+
     with torch.no_grad():
-        if get_depth or get_depth_variance:
-            if depth_real is not None:
-                depth_map = (weights * depth_real).sum(dim=1)  # n1 n2 -> n1
-            else:
-                depth_map = (weights * z_vals).sum(dim=1)  # n1 n2 -> n1
-
-        if get_depth:
-            results[f'depth_{typ}'] = depth_map
-
         if get_depth_variance:
             results[f'depth_variance_{typ}'] = (weights * (z_vals - depth_map.unsqueeze(1)).square()).sum(
                 axis=-1)

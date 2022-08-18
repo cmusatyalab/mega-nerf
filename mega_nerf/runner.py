@@ -511,16 +511,17 @@ class Runner:
             photo_loss = F.mse_loss(results[f'rgb_{typ}'], rgbs, reduction='mean') * self.hparams.photo_weight
             extra_loss = 0
 
-        metrics += {
-            "train/RMSE": depth_rmse(results[f'depth_{typ}'], depths.view(-1)),
-            "train/RMSE_log": depth_rmse_log(results[f'depth_{typ}'], depths.view(-1)),
-            "train/Abs_Rel": depth_abs_rel(results[f'depth_{typ}'], depths.view(-1)),
-            "train/Sq_Rel": depth_sq_rel(results[f'depth_{typ}'], depths.view(-1)),
-            "train/δ_1": depth_delta(results[f'depth_{typ}'], depths.view(-1), 1),
-            "train/δ_2": depth_delta(results[f'depth_{typ}'], depths.view(-1), 2),
-            "train/δ_3": depth_delta(results[f'depth_{typ}'], depths.view(-1), 3),
-        }                                                      
-        depth_loss = F.mse_loss(results[f'depth_{typ}'].view(-1, 1), depths.view(-1, 1), reduction='mean')
+        depths_metric, render_depth_metric = (depths * self.pose_scale_factor).view(-1), results[f'depth_{typ}'] * self.pose_scale_factor
+        metrics.update({
+            "train/RMSE": depth_rmse(render_depth_metric, depths_metric),
+            "train/RMSE_log": depth_rmse_log(render_depth_metric, depths_metric),
+            "train/Abs_Rel": depth_abs_rel(render_depth_metric, depths_metric),
+            "train/Sq_Rel": depth_sq_rel(render_depth_metric, depths_metric),
+            "train/δ_1": depth_delta(render_depth_metric, depths_metric, 1),
+            "train/δ_2": depth_delta(render_depth_metric, depths_metric, 2),
+            "train/δ_3": depth_delta(render_depth_metric, depths_metric, 3),
+        })
+        depth_loss = F.mse_loss(render_depth_metric, depths_metric, reduction='mean')
         metrics['photo_loss'] = photo_loss
         metrics['depth_mse_loss'] = depth_loss
         metrics['loss'] = photo_loss  + depth_loss * self.hparams.depth_weight + extra_loss
@@ -614,14 +615,16 @@ class Runner:
                         val_metrics[agg_key] += val_lpips_metrics[network]
 
                     self.writer.add_histogram('val/weights_dist', results['weights_fine'], global_step=self.iter_step)
+                    depths_metric, render_depth_metric = viz_gt_depths * self.pose_scale_factor, results[f'depth_{typ}'] * self.pose_scale_factor
+                    depths_metric = depths_metric.view(-1)
                     depth_metrics = {
-                        "val_depth/RMSE/{}".format(i): depth_rmse(results[f'depth_{typ}'], viz_gt_depths.view(-1)),
-                        "val_depth/RMSE_log/{}".format(i): depth_rmse_log(results[f'depth_{typ}'], viz_gt_depths.view(-1)),
-                        "val_depth/Abs_Rel/{}".format(i): depth_abs_rel(results[f'depth_{typ}'], viz_gt_depths.view(-1)),
-                        "val_depth/Sq_Rel/{}".format(i): depth_sq_rel(results[f'depth_{typ}'], viz_gt_depths.view(-1)),
-                        "val_depth/δ_1/{}".format(i): depth_delta(results[f'depth_{typ}'], viz_gt_depths.view(-1), 1),
-                        "val_depth/δ_2/{}".format(i): depth_delta(results[f'depth_{typ}'], viz_gt_depths.view(-1), 2),
-                        "val_depth/δ_3/{}".format(i): depth_delta(results[f'depth_{typ}'], viz_gt_depths.view(-1), 3),
+                        "val_depth/RMSE/{}".format(i): depth_rmse(render_depth_metric, depths_metric),
+                        "val_depth/RMSE_log/{}".format(i): depth_rmse_log(render_depth_metric, depths_metric),
+                        "val_depth/Abs_Rel/{}".format(i): depth_abs_rel(render_depth_metric, depths_metric),
+                        "val_depth/Sq_Rel/{}".format(i): depth_sq_rel(render_depth_metric, depths_metric),
+                        "val_depth/δ_1/{}".format(i): depth_delta(render_depth_metric, depths_metric, 1),
+                        "val_depth/δ_2/{}".format(i): depth_delta(render_depth_metric, depths_metric, 2),
+                        "val_depth/δ_3/{}".format(i): depth_delta(render_depth_metric, depths_metric, 3),
                     }
                     for key, value in depth_metrics.items():
                         if self.writer is not None:
@@ -876,8 +879,8 @@ class Runner:
         assert image_path.exists()
 
         depth_path = None
-        for extension in ['.jpg', '.JPG', '.png', '.PNG']:
-            candidate = metadata_path.parent.parent / 'depthvis' / '{}{}'.format(metadata_path.stem, extension)
+        for extension in ['.pfm', '.PFM']:
+            candidate = metadata_path.parent.parent / 'depth' / '{}{}'.format(metadata_path.stem, extension)
             if candidate.exists():
                 depth_path = candidate
                 break
@@ -923,7 +926,7 @@ class Runner:
         当在 hparams 中指定 all_val 为真时, 不使用 masks 进行 inference
         """
         return ImageMetadata(image_path, depth_path, metadata['c2w'], metadata['W'] // scale_factor, metadata['H'] // scale_factor,
-                             intrinsics, image_index, None if (is_val and self.hparams.all_val) else mask_path, is_val)
+                             intrinsics, image_index, None if (is_val and self.hparams.all_val) else mask_path, is_val, self.pose_scale_factor)
 
     def _get_experiment_path(self) -> Path:
         """
