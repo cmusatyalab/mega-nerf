@@ -61,7 +61,7 @@ def read_pfm(file):
 
 
 class ImageMetadata:
-    def __init__(self, image_path: Path, depth_path: Path, c2w: torch.Tensor, W: int, H: int, intrinsics: torch.Tensor, image_index: int,
+    def __init__(self, image_path: Path, c2w: torch.Tensor, W: int, H: int, intrinsics: torch.Tensor, image_index: int,
                  mask_path: Optional[Path], is_val: bool, pose_scale_factor):
         self.image_path = image_path
         self.depth_path = depth_path
@@ -73,8 +73,25 @@ class ImageMetadata:
         self._mask_path = mask_path
         self.is_val = is_val
         self.pose_scale_factor = pose_scale_factor
+        if self.image_path.endswith("pfm"):
+            self.frame_type = 'depth'
+        elif self.image_path.endswith("png") or self.image_path.endswith("jpg"):
+            self.frame_type = 'rgb'
+        else:
+            raise Exception("Cannot recognize filetype (support png and jpg for rgb images; pfm for depth images), path = ", self.image_path)
+    
+    def is_depth_frame(self) -> bool:
+        return self.frame_type == 'depth'
+    
+    def is_rgb_frame(self) -> bool:
+        return self.frame_type == 'rgb'
 
     def load_image(self) -> torch.Tensor:
+        if self.is_depth_frame():
+            return self._load_depth_image()
+        return self._load_image()
+
+    def _load_image(self) -> torch.Tensor:
         """
         从文件系统中读取图片, 并按照 metadata 进行缩放
         Returns:
@@ -88,7 +105,7 @@ class ImageMetadata:
 
         return torch.ByteTensor(np.asarray(rgbs))
     
-    def load_depth_image(self) -> torch.Tensor:
+    def _load_depth_image(self) -> torch.Tensor:
         """
         从文件系统中读取深度图片 (PFM), 并按照 metadata 进行缩放
         Returns:

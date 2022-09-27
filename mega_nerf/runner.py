@@ -614,7 +614,7 @@ class Runner:
 
                         val_metrics[agg_key] += val_lpips_metrics[network]
 
-                    self.writer.add_histogram('val/weights_dist', results['weights_fine'], global_step=self.iter_step)
+                    self.writer.add_histogram('val/weights_dist', torch.log(results['weights_fine']), global_step=self.iter_step)
                     depths_metric, render_depth_metric = viz_gt_depths * self.pose_scale_factor, results[f'depth_{typ}'] * self.pose_scale_factor
                     depths_metric = depths_metric.view(-1)
                     depth_metrics = {

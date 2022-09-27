@@ -124,4 +124,5 @@ def get_opts_base():
     parser.add_argument('--rendernet_multires', type=int, default=4, help='number of multiresolution levels in render net positional embeddings')
 
     parser.add_argument('--anneal_end', type=int, default=50000)
+    parser.add_argument('--sigma_zeroinit', default=False, action='store_true')
     return parser

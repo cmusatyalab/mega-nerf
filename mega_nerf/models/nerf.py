@@ -48,7 +48,7 @@ class ShiftedSoftplus(nn.Module):
 class NeRF(nn.Module):
     def __init__(self, pos_xyz_dim: int, pos_dir_dim: int, layers: int, skip_layers: List[int], layer_dim: int,
                  appearance_dim: int, affine_appearance: bool, appearance_count: int, rgb_dim: int, xyz_dim: int,
-                 sigma_activation: nn.Module):
+                 sigma_activation: nn.Module, sigma_zeroinit: bool):
         super(NeRF, self).__init__()
         self.xyz_dim = xyz_dim
 
@@ -105,6 +105,9 @@ class NeRF(nn.Module):
 
         # output layers
         self.sigma = nn.Linear(layer_dim, 1)
+        if sigma_zeroinit:
+            self.sigma.weight.data.normal_(mean=0, std=0.1)
+            self.sigma.bias.data.fill_(0.)
         self.sigma_activation = sigma_activation
 
         self.rgb = nn.Linear(
