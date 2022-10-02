@@ -570,18 +570,18 @@ class Runner:
                     if metadata_item.is_depth_frame():
                         is_depth = True
                         viz_image = metadata_item.load_image().float()
-                        assert viz_image.shape[-1] == 1
+                        assert viz_image.shape[-1] == 1 or len(viz_image.shape) == 2, f"depth image with shape {viz_image.shape}"
                     else:
                         is_depth = False
                         viz_image = metadata_item.load_image().float() / 255.
-                        assert viz_image.shape[-1] == 3
+                        assert viz_image.shape[-1] == 3, f"color image with shape {viz_image.shape}"
                     img_w, img_h = viz_image.shape[0], viz_image.shape[1]
 
                 with torch.inference_mode(mode=not self.hparams.neus_mode):
                     results, _ = self.render_image(metadata_item)
                 with torch.inference_mode():
                     typ = 'fine' if 'rgb_fine' in results else 'coarse'
-                    if is_depth:
+                    if not is_depth:
                         viz_result_rgbs = results[f'rgb_{typ}'].view((img_w, img_h, 3)).cpu()
 
                         eval_rgbs = viz_image[:, viz_image.shape[1] // 2:].contiguous()
@@ -624,7 +624,6 @@ class Runner:
                             val_metrics[agg_key] += val_lpips_metrics[network]
                     else:
                         self.writer.add_histogram('val/weights_dist', torch.log(results['weights_fine']), global_step=self.iter_step)
-                        print(f"depth_gt shape = {depths_metric.shape}, rendered_depth shape={results[f'depth_{typ}'].shape}")
                         depths_metric, render_depth_metric = viz_image * self.pose_scale_factor, results[f'depth_{typ}'].view(-1) * self.pose_scale_factor
                         depths_metric = depths_metric.view(-1)
                         depth_metrics = {
@@ -802,11 +801,12 @@ class Runner:
     @staticmethod
     def _create_result_image(rgbs: torch.Tensor, result_rgbs: torch.Tensor, gt_depth: torch.Tensor
                             , result_depths: torch.Tensor, gradient: torch.Tensor, weight: torch.Tensor) -> Image:
-        depth_vis = Runner.visualize_scalars(torch.log(result_depths + 1e-8).view(rgbs.shape[0], rgbs.shape[1]).cpu())
         if gt_depth is not None:
-            gt_depth_vis = Runner.visualize_scalars(torch.log(gt_depth + 1e-8).view(rgbs.shape[0], rgbs.shape[1]).cpu())
+            depth_vis = Runner.visualize_scalars(torch.log(result_depths + 1e-8).view(gt_depth.shape[0], gt_depth.shape[1]).cpu())
+            gt_depth_vis = Runner.visualize_scalars(torch.log(gt_depth + 1e-8).view(gt_depth.shape[0], gt_depth.shape[1]).cpu())
         else:
-            gt_depth_vis = torch.zeros_like(depth_vis)
+            depth_vis = Runner.visualize_scalars(torch.log(result_depths + 1e-8).view(rgbs.shape[0], rgbs.shape[1]).cpu())
+            gt_depth_vis = torch.zeros_like(torch.tensor(depth_vis))
         if gradient is not None:
             gradient = gradient.reshape(len(weight), -1, 3)
             out_normal = gradient * weight[:, : (gradient.shape[1]), None]
@@ -817,7 +817,7 @@ class Runner:
         if rgbs is not None:
             images = (rgbs * 255, result_rgbs * 255)
         else:
-            images = (torch.zeros_like(result_rgbs), result_rgbs)
+            images = (torch.zeros_like(torch.tensor(result_rgbs)), result_rgbs)
         ret = np.concatenate([np.concatenate(images, axis=1), np.concatenate(depth, axis=1)], axis=0).astype(np.uint8)
         return Image.fromarray(ret)
 
