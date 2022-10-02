@@ -143,7 +143,8 @@ class Runner:
             - cluster_2d: type=bool TODO: 看看这个是干啥的
         """
         if self.hparams.cluster_mask_path is not None:
-            cluster_params = torch.load(Path(self.hparams.cluster_mask_path).parent / 'params.pt', map_location='cpu')
+            color_mask_path = Path(self.hparams.cluster_mask_path) / 'mask_rgb'
+            cluster_params = torch.load(color_mask_path / 'params.pt', map_location='cpu')
             assert cluster_params['near'] == self.near
             assert (torch.allclose(cluster_params['origin_drb'], self.origin_drb))
             assert cluster_params['pose_scale_factor'] == self.pose_scale_factor
@@ -362,10 +363,10 @@ class Runner:
                         image_indices = None
 
                     metrics, bg_nerf_rays_present = self._training_step(
-                        item['rgbs'].to(self.device, non_blocking=True),
-                        item['depths'].to(self.device, non_blocking=True),
+                        item['rgbs'].to(self.device, non_blocking=True) if item['rgbs'] is not None else None,
+                        item['depths'].to(self.device, non_blocking=True) if item['depths'] is not None else None,
                         item['rays'].to(self.device, non_blocking=True),
-                        image_indices)
+                        image_indices, item['depth_mask'].to(self.device, non_blocking=True))
 
                     with torch.no_grad():
                         for key, val in metrics.items():
@@ -470,7 +471,7 @@ class Runner:
             dist.barrier()
         # end _setup_experiment_dir
 
-    def _training_step(self, rgbs: torch.Tensor, depths: torch.Tensor, rays: torch.Tensor, image_indices: Optional[torch.Tensor]) \
+    def _training_step(self, rgbs: torch.Tensor, depths: torch.Tensor, rays: torch.Tensor, image_indices: Optional[torch.Tensor], depth_masks: torch.BoolTensor) \
             -> Tuple[Dict[str, Union[torch.Tensor, float]], bool]:
         self.iter_step += 1
         results, bg_nerf_rays_present = render_rays(nerf=self.nerf,
@@ -489,9 +490,11 @@ class Runner:
                                                     cos_anneal_ratio=self.get_cos_anneal_ratio()
                                                     )
         typ = 'fine' if 'rgb_fine' in results else 'coarse'
+        # print(f"rays shape = {rays.shape}, rendered rgb shape = {results[f'rgb_{typ}'].shape}, rendered depth shape = {results[f'depth_{typ}'].shape}")
 
+        color_masks = 1 - depth_masks
         with torch.no_grad():
-            psnr_ = psnr(results[f'rgb_{typ}'], rgbs)
+            psnr_ = psnr(results[f'rgb_{typ}'] * color_masks, rgbs * color_masks)
             depth_variance = results[f'depth_variance_{typ}'].mean()
 
         metrics = {
@@ -500,18 +503,24 @@ class Runner:
         }
 
         if self.hparams.neus_mode:
-            photo_loss = F.l1_loss(results[f'rgb_{typ}'], rgbs, reduction='mean') * self.hparams.photo_weight
+            photo_loss = F.l1_loss(results[f'rgb_{typ}'] * color_masks, rgbs * color_masks, reduction='mean') * self.hparams.photo_weight
             eikonal_loss = results[f'gradient_error_{typ}'] * self.hparams.eikonal_weight
             metrics['eikonal_loss'] = eikonal_loss
-            # fs_loss, tr_loss = get_sdf_loss(results[f'zvals_{typ}'], results[f'raw_sigma_{typ}'].reshape(results[f'zvals_{typ}'].shape), depths)
-            # sdf_loss = (tr_loss) * self.hparams.sdf_weight
-            # metrics['sdf_loss'] = sdf_loss
             extra_loss = eikonal_loss
         else:
-            photo_loss = F.mse_loss(results[f'rgb_{typ}'], rgbs, reduction='mean') * self.hparams.photo_weight
+            photo_loss = F.mse_loss(results[f'rgb_{typ}'] * color_masks, rgbs * color_masks, reduction='mean') * self.hparams.photo_weight
             extra_loss = 0
+            metrics['loss'] = photo_loss
 
-        depths_metric, render_depth_metric = (depths * self.pose_scale_factor).view(-1), results[f'depth_{typ}'] * self.pose_scale_factor
+        if self.hparams.use_cascade and typ != 'coarse' and not self.hparams.neus_mode:
+            coarse_loss = F.mse_loss(results['rgb_coarse'], rgbs, reduction='mean')
+
+            metrics['coarse_loss'] = coarse_loss
+            metrics['loss'] += coarse_loss
+            metrics['loss'] /= 2
+
+        depths_metric, render_depth_metric = (depths * depth_masks * self.pose_scale_factor).view(-1), \
+            (results[f'depth_{typ}'].reshape(-1, 1) * depth_masks * self.pose_scale_factor).view(-1)
         metrics.update({
             "train/RMSE": depth_rmse(render_depth_metric, depths_metric),
             "train/RMSE_log": depth_rmse_log(render_depth_metric, depths_metric),
@@ -524,15 +533,7 @@ class Runner:
         depth_loss = F.mse_loss(render_depth_metric, depths_metric, reduction='mean')
         metrics['photo_loss'] = photo_loss
         metrics['depth_mse_loss'] = depth_loss
-        metrics['loss'] = photo_loss  + depth_loss * self.hparams.depth_weight + extra_loss
-
-        if self.hparams.use_cascade and typ != 'coarse' and not self.hparams.neus_mode:
-            coarse_loss = F.mse_loss(results['rgb_coarse'], rgbs, reduction='mean')
-
-            metrics['coarse_loss'] = coarse_loss
-            metrics['loss'] += coarse_loss
-            metrics['loss'] /= 2
-
+        metrics['loss'] += depth_loss * self.hparams.depth_weight + extra_loss
         return metrics, bg_nerf_rays_present
 
     def _run_validation(self, train_index: int) -> Dict[str, float]:
@@ -566,76 +567,85 @@ class Runner:
             for i in main_tqdm(indices_to_eval):
                 with torch.no_grad():
                     metadata_item = self.val_items[i]
-                    viz_rgbs = metadata_item.load_image().float() / 255.
-                    viz_gt_depths = metadata_item.load_depth_image().float()
+                    if metadata_item.is_depth_frame():
+                        is_depth = True
+                        viz_image = metadata_item.load_image().float()
+                        assert viz_image.shape[-1] == 1
+                    else:
+                        is_depth = False
+                        viz_image = metadata_item.load_image().float() / 255.
+                        assert viz_image.shape[-1] == 3
+                    img_w, img_h = viz_image.shape[0], viz_image.shape[1]
 
                 with torch.inference_mode(mode=not self.hparams.neus_mode):
                     results, _ = self.render_image(metadata_item)
                 with torch.inference_mode():
                     typ = 'fine' if 'rgb_fine' in results else 'coarse'
-                    viz_result_rgbs = results[f'rgb_{typ}'].view(*viz_rgbs.shape).cpu()
+                    if is_depth:
+                        viz_result_rgbs = results[f'rgb_{typ}'].view((img_w, img_h, 3)).cpu()
 
-                    eval_rgbs = viz_rgbs[:, viz_rgbs.shape[1] // 2:].contiguous()
-                    eval_result_rgbs = viz_result_rgbs[:, viz_rgbs.shape[1] // 2:].contiguous()
+                        eval_rgbs = viz_image[:, viz_image.shape[1] // 2:].contiguous()
+                        eval_result_rgbs = viz_result_rgbs[:, viz_image.shape[1] // 2:].contiguous()
 
-                    val_psnr = psnr(eval_result_rgbs.view(-1, 3), eval_rgbs.view(-1, 3))
+                        val_psnr = psnr(eval_result_rgbs.view(-1, 3), eval_rgbs.view(-1, 3))
 
-                    metric_key = 'val/psnr/{}'.format(i)
-                    if self.writer is not None:
-                        self.writer.add_scalar(metric_key, val_psnr, train_index)
-                    else:
-                        torch.save({'value': val_psnr, 'metric_key': metric_key, 'agg_key': 'val/psnr'},
-                                    metric_path / 'psnr-{}.pt'.format(i))
-
-                    val_metrics['val/psnr'] += val_psnr
-
-                    val_ssim = ssim(eval_result_rgbs.view(*eval_rgbs.shape), eval_rgbs, 1)
-
-                    metric_key = 'val/ssim/{}'.format(i)
-                    if self.writer is not None:
-                        self.writer.add_scalar(metric_key, val_ssim, train_index)
-                    else:
-                        torch.save({'value': val_ssim, 'metric_key': metric_key, 'agg_key': 'val/ssim'},
-                                    metric_path / 'ssim-{}.pt'.format(i))
-
-                    val_metrics['val/ssim'] += val_ssim
-
-                    val_lpips_metrics = lpips(eval_result_rgbs.view(*eval_rgbs.shape), eval_rgbs)
-
-                    for network in val_lpips_metrics:
-                        agg_key = 'val/lpips/{}'.format(network)
-                        metric_key = '{}/{}'.format(agg_key, i)
+                        metric_key = 'val/psnr/{}'.format(i)
                         if self.writer is not None:
-                            self.writer.add_scalar(metric_key, val_lpips_metrics[network], train_index)
+                            self.writer.add_scalar(metric_key, val_psnr, train_index)
                         else:
-                            torch.save(
-                                {'value': val_lpips_metrics[network], 'metric_key': metric_key, 'agg_key': agg_key},
-                                metric_path / 'lpips-{}-{}.pt'.format(network, i))
+                            torch.save({'value': val_psnr, 'metric_key': metric_key, 'agg_key': 'val/psnr'},
+                                        metric_path / 'psnr-{}.pt'.format(i))
 
-                        val_metrics[agg_key] += val_lpips_metrics[network]
+                        val_metrics['val/psnr'] += val_psnr
 
-                    self.writer.add_histogram('val/weights_dist', torch.log(results['weights_fine']), global_step=self.iter_step)
-                    depths_metric, render_depth_metric = viz_gt_depths * self.pose_scale_factor, results[f'depth_{typ}'] * self.pose_scale_factor
-                    depths_metric = depths_metric.view(-1)
-                    depth_metrics = {
-                        "val_depth/RMSE/{}".format(i): depth_rmse(render_depth_metric, depths_metric),
-                        "val_depth/RMSE_log/{}".format(i): depth_rmse_log(render_depth_metric, depths_metric),
-                        "val_depth/Abs_Rel/{}".format(i): depth_abs_rel(render_depth_metric, depths_metric),
-                        "val_depth/Sq_Rel/{}".format(i): depth_sq_rel(render_depth_metric, depths_metric),
-                        "val_depth/δ_1/{}".format(i): depth_delta(render_depth_metric, depths_metric, 1),
-                        "val_depth/δ_2/{}".format(i): depth_delta(render_depth_metric, depths_metric, 2),
-                        "val_depth/δ_3/{}".format(i): depth_delta(render_depth_metric, depths_metric, 3),
-                    }
-                    for key, value in depth_metrics.items():
+                        val_ssim = ssim(eval_result_rgbs.view(*eval_rgbs.shape), eval_rgbs, 1)
+
+                        metric_key = 'val/ssim/{}'.format(i)
                         if self.writer is not None:
-                            self.writer.add_scalar(key, value, train_index)
+                            self.writer.add_scalar(metric_key, val_ssim, train_index)
                         else:
-                            torch.save({'value': value, 'metric_key': key, 'agg_key': key},
-                                       metric_path / 'depth-{}.pt'.format(i))
+                            torch.save({'value': val_ssim, 'metric_key': metric_key, 'agg_key': 'val/ssim'},
+                                        metric_path / 'ssim-{}.pt'.format(i))
 
-                        val_metrics[key] += value
+                        val_metrics['val/ssim'] += val_ssim
 
-                    viz_result_rgbs = viz_result_rgbs.view(viz_rgbs.shape[0], viz_rgbs.shape[1], 3).cpu()
+                        val_lpips_metrics = lpips(eval_result_rgbs.view(*eval_rgbs.shape), eval_rgbs)
+
+                        for network in val_lpips_metrics:
+                            agg_key = 'val/lpips/{}'.format(network)
+                            metric_key = '{}/{}'.format(agg_key, i)
+                            if self.writer is not None:
+                                self.writer.add_scalar(metric_key, val_lpips_metrics[network], train_index)
+                            else:
+                                torch.save(
+                                    {'value': val_lpips_metrics[network], 'metric_key': metric_key, 'agg_key': agg_key},
+                                    metric_path / 'lpips-{}-{}.pt'.format(network, i))
+
+                            val_metrics[agg_key] += val_lpips_metrics[network]
+                    else:
+                        self.writer.add_histogram('val/weights_dist', torch.log(results['weights_fine']), global_step=self.iter_step)
+                        print(f"depth_gt shape = {depths_metric.shape}, rendered_depth shape={results[f'depth_{typ}'].shape}")
+                        depths_metric, render_depth_metric = viz_image * self.pose_scale_factor, results[f'depth_{typ}'].view(-1) * self.pose_scale_factor
+                        depths_metric = depths_metric.view(-1)
+                        depth_metrics = {
+                            "val_depth/RMSE/{}".format(i): depth_rmse(render_depth_metric, depths_metric),
+                            "val_depth/RMSE_log/{}".format(i): depth_rmse_log(render_depth_metric, depths_metric),
+                            "val_depth/Abs_Rel/{}".format(i): depth_abs_rel(render_depth_metric, depths_metric),
+                            "val_depth/Sq_Rel/{}".format(i): depth_sq_rel(render_depth_metric, depths_metric),
+                            "val_depth/δ_1/{}".format(i): depth_delta(render_depth_metric, depths_metric, 1),
+                            "val_depth/δ_2/{}".format(i): depth_delta(render_depth_metric, depths_metric, 2),
+                            "val_depth/δ_3/{}".format(i): depth_delta(render_depth_metric, depths_metric, 3),
+                        }
+                        for key, value in depth_metrics.items():
+                            if self.writer is not None:
+                                self.writer.add_scalar(key, value, train_index)
+                            else:
+                                torch.save({'value': value, 'metric_key': key, 'agg_key': key},
+                                        metric_path / 'depth-{}.pt'.format(i))
+
+                            val_metrics[key] += value
+
+                    viz_result_rgbs = viz_result_rgbs.view(viz_image.shape[0], viz_image.shape[1], 3).cpu()
                     viz_depth = results[f'depth_{typ}']
                     if f'fg_depth_{typ}' in results:
                         to_use = results[f'fg_depth_{typ}'].view(-1)
@@ -645,10 +655,8 @@ class Runner:
 
                         viz_depth = viz_depth.clamp_max(ma)
 
-                    if self.hparams.neus_mode:
-                        img = Runner._create_result_image(viz_rgbs, viz_result_rgbs, viz_gt_depths, viz_depth, results['gradient_fine'], results['weights_fine'])
-                    else:
-                        img = Runner._create_result_image(viz_rgbs, viz_result_rgbs, viz_gt_depths, viz_depth, None, None)
+                    img = Runner._create_result_image(viz_image if not is_depth else None, viz_result_rgbs,
+                                                      viz_image if is_depth else None, viz_depth, None, None)
 
 
                     save_path = self.experiment_path / 'valimg' / f'val-{self.iter_step}'
@@ -795,7 +803,10 @@ class Runner:
     def _create_result_image(rgbs: torch.Tensor, result_rgbs: torch.Tensor, gt_depth: torch.Tensor
                             , result_depths: torch.Tensor, gradient: torch.Tensor, weight: torch.Tensor) -> Image:
         depth_vis = Runner.visualize_scalars(torch.log(result_depths + 1e-8).view(rgbs.shape[0], rgbs.shape[1]).cpu())
-        gt_depth_vis = Runner.visualize_scalars(torch.log(gt_depth + 1e-8).view(rgbs.shape[0], rgbs.shape[1]).cpu())
+        if gt_depth is not None:
+            gt_depth_vis = Runner.visualize_scalars(torch.log(gt_depth + 1e-8).view(rgbs.shape[0], rgbs.shape[1]).cpu())
+        else:
+            gt_depth_vis = torch.zeros_like(depth_vis)
         if gradient is not None:
             gradient = gradient.reshape(len(weight), -1, 3)
             out_normal = gradient * weight[:, : (gradient.shape[1]), None]
@@ -803,7 +814,10 @@ class Runner:
             depth = (out_normal, depth_vis)
         else:
             depth = (gt_depth_vis, depth_vis)
-        images = (rgbs * 255, result_rgbs * 255)
+        if rgbs is not None:
+            images = (rgbs * 255, result_rgbs * 255)
+        else:
+            images = (torch.zeros_like(result_rgbs), result_rgbs)
         ret = np.concatenate([np.concatenate(images, axis=1), np.concatenate(depth, axis=1)], axis=0).astype(np.uint8)
         return Image.fromarray(ret)
 
@@ -827,34 +841,50 @@ class Runner:
         从 hparams.dataset_path 指定的数据集位置读入元信息
         """
         dataset_path = Path(self.hparams.dataset_path)
+        depth_track = self.hparams.depth_track
 
-        train_path_candidates = sorted(list((dataset_path / 'train' / 'metadata').iterdir()))
-        train_paths = [train_path_candidates[i] for i in
-                       range(0, len(train_path_candidates), self.hparams.train_every)]
+        train_path_candidates_rgb = sorted(list((dataset_path / 'train' / 'metadata_rgb').iterdir()))
+        train_paths_rgb = [train_path_candidates_rgb[i] for i in
+                           range(0, len(train_path_candidates_rgb), self.hparams.train_every)]
+        train_path_candidates_depth = sorted(list((dataset_path / 'train' / f'metadata_depth_{depth_track}').iterdir()))
+        train_paths_depth = [train_path_candidates_depth[i] for i in
+                             range(0, len(train_path_candidates_depth), self.hparams.train_every)]
 
-        val_paths = sorted(list((dataset_path / 'val' / 'metadata').iterdir()))
-        train_paths += val_paths
-        train_paths.sort(key=lambda x: x.name)
-        val_paths_set = set(val_paths)
+        val_paths_rgb = sorted(list((dataset_path / 'val' / 'metadata_rgb').iterdir()))
+        train_paths_rgb += val_paths_rgb
+        train_paths_rgb.sort(key=lambda x: x.name)
+        val_paths_set_rgb = set(val_paths_rgb)
+
+        val_paths_depth = sorted(list((dataset_path / 'val' / f'metadata_depth_{depth_track}').iterdir()))
+        train_paths_depth += val_paths_depth
+        train_paths_depth.sort(key=lambda x: x.name)
+        val_paths_set_depth = set(val_paths_depth)
 
         image_indices = {}
-        for i, train_path in enumerate(train_paths):
+        for i, train_path in enumerate(train_paths_rgb):
             image_indices[train_path.name] = i
+
+        depth_indices = {}
+        for i, train_path in enumerate(train_paths_depth):
+            depth_indices[train_path.name] = i
 
         """
         这里训练集中也会有验证集的图片, 用于训练 per-image 的 appearance embedding
         - 详见: https://github.com/cmusatyalab/mega-nerf/issues/18
         """
         train_items = [
-            self._get_metadata_item(x, image_indices[x.name], self.hparams.train_scale_factor, x in val_paths_set) for x
-            in train_paths]
-        val_items = [
-            self._get_metadata_item(x, image_indices[x.name], self.hparams.val_scale_factor, True) for x in val_paths]
+            self._get_metadata_item(x, depth_track, image_indices[x.name], self.hparams.train_scale_factor, x in val_paths_set_rgb, False) for x
+            in train_paths_rgb] + [
+            self._get_metadata_item(x, depth_track, depth_indices[x.name], self.hparams.train_scale_factor, x in val_paths_set_depth, True) for x
+            in train_paths_depth
+            ]
+        val_items = [self._get_metadata_item(x, depth_track, image_indices[x.name], self.hparams.val_scale_factor, True, False) for x in val_paths_rgb] + \
+                    [self._get_metadata_item(x, depth_track, depth_indices[x.name], self.hparams.val_scale_factor, True, True) for x in val_paths_depth]
 
         return train_items, val_items
 
-    def _get_metadata_item(self, metadata_path: Path, image_index: int, scale_factor: int,
-                           is_val: bool) -> ImageMetadata:
+    def _get_metadata_item(self, metadata_path: Path, depth_name: str, image_index: int, scale_factor: int,
+                           is_val: bool, is_depth: bool) -> ImageMetadata:
         """
         从元数据文件中读入元信息
         - 确认对应的图片存在
@@ -862,30 +892,33 @@ class Runner:
         - 将内参按照 scale_factor 缩放, 确保图片大小能够被 scale_factor 整除
 
         Input:
-            metadata_path: 元数据文件路径, 地址是训练集或验证集中 rgbs/metadata/{image_name}.pt
+            metadata_path: 元数据文件路径, 地址是训练集或验证集中
             image_index: 图像索引
+            depth_name: 深度图的轨迹名称, 如 metadata_depth_abc 的 depth_name 为 abc
             scale_factor: 图像缩放比例
             is_val: 是否为验证集
+            is_depth: 是否为深度图
         Return:
             ImageMetadata: 元信息
         """
-        image_path = None
-        for extension in ['.jpg', '.JPG', '.png', '.PNG']:
-            candidate = metadata_path.parent.parent / 'rgbs' / '{}{}'.format(metadata_path.stem, extension)
-            if candidate.exists():
-                image_path = candidate
-                break
+        if not is_depth:
+            image_path = None
+            for extension in ['.jpg', '.JPG', '.png', '.PNG']:
+                candidate = metadata_path.parent.parent / 'rgbs' / '{}{}'.format(metadata_path.stem, extension)
+                if candidate.exists():
+                    image_path = candidate
+                    break
+            assert image_path is not None
+        else:
+            depth_path = None
+            for extension in ['.pfm', '.PFM']:
+                candidate = metadata_path.parent.parent / f'depth_{depth_name}' / '{}{}'.format(metadata_path.stem, extension)
+                if candidate.exists():
+                    depth_path = candidate
+                    break
+            assert depth_path is not None, metadata_path.parent.parent / f'depth_{depth_name}' / '{}{}'.format(metadata_path.stem, extension)
+            image_path = depth_path
 
-        assert image_path.exists()
-
-        depth_path = None
-        for extension in ['.pfm', '.PFM']:
-            candidate = metadata_path.parent.parent / 'depth' / '{}{}'.format(metadata_path.stem, extension)
-            if candidate.exists():
-                depth_path = candidate
-                break
-
-        assert depth_path.exists()
         """
         加载对应的元信息 pt 文件
         - H, W: 图片的高和宽
@@ -907,26 +940,23 @@ class Runner:
         - 详见: scripts/create_cluster_masks.py
         - 其中的 mask 是一个 torch.Tensor, shape=(H, W), dtype=torch.bool
 
-        masks 的位置可以通过 hparams.cluster_mask_path 指定, 也可以放在数据集根目录下的 masks 目录中
-        如果都没有指定, 则 masks 为空, 因此 masks 不是必须的
+        如果没有指定, 则 masks 为空, 因此 masks 不是必须的
         """
-        dataset_mask = metadata_path.parent.parent.parent / 'masks' / metadata_path.name
+        color_mask_path = Path(self.hparams.cluster_mask_path) / 'mask_rgb' / f'{self.hparams.centroid}'
+        depth_mask_path = Path(self.hparams.cluster_mask_path) / f'mask_depth_{depth_name}' / f'{self.hparams.centroid}'
+        cluster_mask_path = depth_mask_path if is_depth else color_mask_path
         if self.hparams.cluster_mask_path is not None:
             if image_index == 0:
-                main_print('Using cluster mask path: {}'.format(self.hparams.cluster_mask_path))
-            mask_path = Path(self.hparams.cluster_mask_path) / metadata_path.name
-        elif dataset_mask.exists():
-            if image_index == 0:
-                main_print('Using dataset mask path: {}'.format(dataset_mask.parent))
-            mask_path = dataset_mask
+                main_print('Using cluster mask path: {}'.format(cluster_mask_path))
+            mask_path = cluster_mask_path / metadata_path.name
         else:
             mask_path = None
 
         """
         当在 hparams 中指定 all_val 为真时, 不使用 masks 进行 inference
         """
-        return ImageMetadata(image_path, depth_path, metadata['c2w'], metadata['W'] // scale_factor, metadata['H'] // scale_factor,
-                             intrinsics, image_index, None if (is_val and self.hparams.all_val) else mask_path, is_val, self.pose_scale_factor)
+        return ImageMetadata(image_path, metadata['c2w_init'] if is_depth else metadata['c2w'], metadata['W'] // scale_factor, metadata['H'] // scale_factor,
+                             intrinsics, image_index, None if (is_val and self.hparams.all_val) else mask_path, is_val, self.pose_scale_factor, is_depth)
 
     def _get_experiment_path(self) -> Path:
         """

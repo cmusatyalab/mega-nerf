@@ -17,8 +17,10 @@ def get_rgbd_index_mask(metadata: ImageMetadata) -> Optional[
     - indices: 图片的索引 (torch.Tensor) shape: (n_mask, 1)
     - masks: 图片的 mask (torch.Tensor) shape: (self.W * self.H, 1)
     """
-    rgbs = metadata.load_image().view(-1, 3)
-    depths = metadata.load_depth_image().view(-1, 1)
+    if metadata.is_depth:
+        image = metadata.load_image().view(-1, 1)
+    else:
+        image = metadata.load_image().view(-1, 3)
 
     keep_mask = metadata.load_mask()
 
@@ -47,8 +49,7 @@ def get_rgbd_index_mask(metadata: ImageMetadata) -> Optional[
             return None
 
         keep_mask = keep_mask.view(-1)
-        rgbs = rgbs[keep_mask == True]
-        depths = depths[keep_mask == True]
+        image = image[keep_mask == True]
 
     assert metadata.image_index <= torch.iinfo(torch.int32).max
-    return rgbs, depths, metadata.image_index * torch.ones(rgbs.shape[0], dtype=torch.int32), keep_mask
+    return image, metadata.image_index * torch.ones(image.shape[0], dtype=torch.int32), keep_mask

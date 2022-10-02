@@ -62,9 +62,8 @@ def read_pfm(file):
 
 class ImageMetadata:
     def __init__(self, image_path: Path, c2w: torch.Tensor, W: int, H: int, intrinsics: torch.Tensor, image_index: int,
-                 mask_path: Optional[Path], is_val: bool, pose_scale_factor):
+                 mask_path: Optional[Path], is_val: bool, pose_scale_factor, is_depth: bool):
         self.image_path = image_path
-        self.depth_path = depth_path
         self.c2w = c2w
         self.W = W
         self.H = H
@@ -73,18 +72,13 @@ class ImageMetadata:
         self._mask_path = mask_path
         self.is_val = is_val
         self.pose_scale_factor = pose_scale_factor
-        if self.image_path.endswith("pfm"):
-            self.frame_type = 'depth'
-        elif self.image_path.endswith("png") or self.image_path.endswith("jpg"):
-            self.frame_type = 'rgb'
-        else:
-            raise Exception("Cannot recognize filetype (support png and jpg for rgb images; pfm for depth images), path = ", self.image_path)
+        self.is_depth = is_depth
     
     def is_depth_frame(self) -> bool:
-        return self.frame_type == 'depth'
+        return self.is_depth
     
     def is_rgb_frame(self) -> bool:
-        return self.frame_type == 'rgb'
+        return not self.is_depth 
 
     def load_image(self) -> torch.Tensor:
         if self.is_depth_frame():
@@ -111,7 +105,7 @@ class ImageMetadata:
         Returns:
         - torch.Tensor: 深度图片的缩放后的 tensor (self.W, self.H, 1)
         """
-        depths = read_pfm(self.depth_path)
+        depths = read_pfm(self.image_path)
         depths[depths > 150] = 150
         depths /= self.pose_scale_factor
         depths = np.ascontiguousarray(depths)
@@ -129,6 +123,8 @@ class ImageMetadata:
         """
         if self._mask_path is None:
             return None
+        assert (self.is_depth and 'depth' in self._mask_path.parent.parent.stem) or (not self.is_depth and 'rgb' in self._mask_path.parent.parent.stem),\
+            f'depth type and metadata not match, is_depth={self.is_depth} and metadata folder path={self._mask_path.parent.parent.stem}'
 
         with ZipFile(self._mask_path) as zf:
             with zf.open(self._mask_path.name) as f:

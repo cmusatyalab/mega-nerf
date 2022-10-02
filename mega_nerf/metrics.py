@@ -126,8 +126,8 @@ def depth_rmse(
 ) -> float:
     """Computes the RMSE between two depths.
     Args:
-      depth_predict: torch.tensor. A depth map of size [width, height].
-      depth_gt: torch.tensor. A depth map of size [width, height].
+      depth_predict: torch.tensor. A depth map of size (width * height).
+      depth_gt: torch.tensor. A depth map of size (width * height).
     Returns:
       The RMSE between the two depths.
     """
@@ -140,8 +140,8 @@ def depth_rmse_log(
 ) -> float:
     """Computes the RMSE between two depths.
     Args:
-      depth_predict: torch.tensor. A depth map of size [width, height].
-      depth_gt: torch.tensor. A depth map of size [width, height].
+      depth_predict: torch.tensor. A depth map of size (width * height).
+      depth_gt: torch.tensor. A depth map of size (width * height).
     Returns:
       The RMSE between the two depths.
     """
@@ -154,8 +154,8 @@ def depth_abs_rel(
 ) -> float:
     """Computes the absolute relative error between two depths.
     Args:
-      depth_predict: torch.tensor. A depth map of size [width, height].
-      depth_gt: torch.tensor. A depth map of size [width, height].
+      depth_predict: torch.tensor. A depth map of size (width * height).
+      depth_gt: torch.tensor. A depth map of size (width * height).
     Returns:
       The absolute relative error between the two depths.
     """
@@ -168,8 +168,8 @@ def depth_sq_rel(
 ) -> float:
     """Computes the squared relative error between two depths.
     Args:
-      depth_predict: torch.tensor. A depth map of size [width, height].
-      depth_gt: torch.tensor. A depth map of size [width, height].
+      depth_predict: torch.tensor. A depth map of size (width * height).
+      depth_gt: torch.tensor. A depth map of size (width * height).
     Returns:
       The squared relative error between the two depths.
     """

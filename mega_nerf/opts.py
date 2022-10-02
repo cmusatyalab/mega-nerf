@@ -125,4 +125,7 @@ def get_opts_base():
 
     parser.add_argument('--anneal_end', type=int, default=50000)
     parser.add_argument('--sigma_zeroinit', default=False, action='store_true')
+
+    parser.add_argument('--depth_track', type=str, help='depth track name')
+    parser.add_argument('--centroid', type=int, help='centroid number to be optimized, 0-indexed')
     return parser

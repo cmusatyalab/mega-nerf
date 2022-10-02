@@ -66,6 +66,7 @@ class FilesystemDataset(Dataset):
         self._chunk_index = cycle(range(len(self._parquet_paths)))
         self._loaded_rgbs = None
         self._loaded_depths = None
+        self._loaded_depth_mask= None
         self._loaded_rays = None
         self._loaded_img_indices = None
         self._chunk_load_executor = ThreadPoolExecutor(max_workers=1)
@@ -73,7 +74,7 @@ class FilesystemDataset(Dataset):
         self._chosen = None
 
     def load_chunk(self) -> None:
-        chosen, self._loaded_rgbs, self._loaded_depths, self._loaded_rays, self._loaded_img_indices = self._chunk_future.result()
+        chosen, self._loaded_rgbs, self._loaded_depths, self._loaded_depth_mask, self._loaded_rays, self._loaded_img_indices = self._chunk_future.result()
         self._chosen = chosen
         self._chunk_future = self._chunk_load_executor.submit(self._load_chunk_inner)
 
@@ -91,11 +92,12 @@ class FilesystemDataset(Dataset):
         return {
             'rgbs': self._loaded_rgbs[idx],
             'depths': self._loaded_depths[idx],
+            'depth_mask': self._loaded_depth_mask[idx],
             'rays': self._loaded_rays[idx],
             'img_indices': self._loaded_img_indices[idx]
         }
 
-    def _load_chunk_inner(self) -> Tuple[str, torch.FloatTensor, torch.FloatTensor, torch.ShortTensor]:
+    def _load_chunk_inner(self) -> Tuple[str, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.ShortTensor]:
         if 'RANK' in os.environ:
             torch.cuda.set_device(int(os.environ['LOCAL_RANK']))
 
@@ -132,7 +134,8 @@ class FilesystemDataset(Dataset):
 
         rgbs = torch.FloatTensor(loaded_chunk.to_pandas()[['rgbs_{}'.format(i) for i in range(3)]].to_numpy()) / 255.
         depths = torch.FloatTensor(loaded_chunk.to_pandas()[['depths']].to_numpy())
-        return str(chosen), rgbs, depths, loaded_rays, loaded_img_indices
+        depth_mask = torch.FloatTensor(loaded_chunk.to_pandas()[['depth_mask']].to_numpy())
+        return str(chosen), rgbs, depths, depth_mask, loaded_rays, loaded_img_indices
 
     def _write_chunks(self, metadata_items: List[ImageMetadata], center_pixels: bool, device: torch.device,
                       chunk_paths: List[Path], num_chunks: int, scale_factor: int, disk_flush_size: int) -> None:
@@ -205,6 +208,7 @@ class FilesystemDataset(Dataset):
                 for i in range(3):
                     dtypes.append(('rgbs_{}'.format(i), pa.uint8()))
                 dtypes.append(('depths', pa.float32()))
+                dtypes.append(('depth_mask', pa.float32()))
 
                 if self._directions is not None:
                     dtypes.append(('pixel_indices', pa.int32()))
@@ -221,6 +225,7 @@ class FilesystemDataset(Dataset):
         write_futures = []
         rgbs = []
         depths = []
+        depth_mask = []
         rays = []
         indices = []
         in_memory_count = 0
@@ -236,11 +241,17 @@ class FilesystemDataset(Dataset):
                 if image_data is None:
                     continue
 
-                image_rgbs, image_depths, img_indices, image_keep_mask = image_data
-                rgbs.append(image_rgbs)
-                depths.append(image_depths)
+                image, img_indices, image_keep_mask = image_data
+                if metadata_item.is_depth:
+                    depths.append(image)
+                    rgbs.append(torch.zeros((len(image), 3), dtype=torch.uint8))
+                    depth_mask.append(torch.ones((len(image), 1)).float())
+                else:
+                    depths.append(torch.zeros((len(image), 1)).float())
+                    rgbs.append(image)
+                    depth_mask.append(torch.zeros((len(image), 1)).float())
                 indices.append(img_indices)
-                in_memory_count += len(image_rgbs)
+                in_memory_count += len(image)
 
                 """
                 计算该 metadata 下的光线
@@ -272,7 +283,7 @@ class FilesystemDataset(Dataset):
                     for write_future in write_futures:
                         write_future.result()
 
-                    write_futures = self._write_to_disk(executor, torch.cat(rgbs), torch.cat(depths), torch.cat(rays), torch.cat(indices),
+                    write_futures = self._write_to_disk(executor, torch.cat(rgbs), torch.cat(depths), torch.cat(depth_mask), torch.cat(rays), torch.cat(indices),
                                                         parquet_writers, img_indices_dtype)
 
                     rgbs = []
@@ -284,7 +295,7 @@ class FilesystemDataset(Dataset):
                 write_future.result()
 
             if in_memory_count > 0:
-                write_futures = self._write_to_disk(executor, torch.cat(rgbs), torch.cat(depths), torch.cat(rays), torch.cat(indices),
+                write_futures = self._write_to_disk(executor, torch.cat(rgbs), torch.cat(depths), torch.cat(depth_mask), torch.cat(rays), torch.cat(indices),
                                                     parquet_writers, img_indices_dtype)
 
                 for write_future in write_futures:
@@ -346,12 +357,13 @@ class FilesystemDataset(Dataset):
         else:
             return None
 
-    def _write_to_disk(self, executor: ThreadPoolExecutor, rgbs: torch.Tensor, depths: torch.FloatTensor, 
+    def _write_to_disk(self, executor: ThreadPoolExecutor, rgbs: torch.Tensor, depths: torch.FloatTensor, depth_mask: torch.FloatTensor,
                        rays: torch.FloatTensor, img_indices: torch.Tensor, parquet_writers: List[pq.ParquetWriter],
                        img_indices_dtype: Type[Union[np.ushort, np.int]]) -> List[Future[None]]:
         indices = torch.randperm(rgbs.shape[0])
         shuffled_rgbs = rgbs[indices]
         shuffled_depths = depths[indices]
+        shuffled_depth_mask = depth_mask[indices]
         shuffled_rays = rays[indices]
         shuffled_img_indices = img_indices[indices]
 
@@ -370,6 +382,7 @@ class FilesystemDataset(Dataset):
                 columns['rgbs_{}'.format(i)] = shuffled_rgbs[index * chunk_size:(index + 1) * chunk_size, i].numpy()
             
             columns['depths'] = shuffled_depths[index * chunk_size:(index + 1) * chunk_size, 0].numpy()
+            columns['depth_mask'] = shuffled_depth_mask[index * chunk_size:(index + 1) * chunk_size, 0].numpy()
 
             if self._directions is not None:
                 columns['pixel_indices'] = shuffled_rays[index * chunk_size:(index + 1) * chunk_size].numpy()
