@@ -510,14 +510,6 @@ class Runner:
         else:
             photo_loss = F.mse_loss(results[f'rgb_{typ}'] * color_masks, rgbs * color_masks, reduction='mean') * self.hparams.photo_weight
             extra_loss = 0
-            metrics['loss'] = photo_loss
-
-        if self.hparams.use_cascade and typ != 'coarse' and not self.hparams.neus_mode:
-            coarse_loss = F.mse_loss(results['rgb_coarse'], rgbs, reduction='mean')
-
-            metrics['coarse_loss'] = coarse_loss
-            metrics['loss'] += coarse_loss
-            metrics['loss'] /= 2
 
         depths_metric, render_depth_metric = (depths * depth_masks * self.pose_scale_factor).view(-1), \
             (results[f'depth_{typ}'].reshape(-1, 1) * depth_masks * self.pose_scale_factor).view(-1)
@@ -533,7 +525,7 @@ class Runner:
         depth_loss = F.mse_loss(render_depth_metric, depths_metric, reduction='mean')
         metrics['photo_loss'] = photo_loss
         metrics['depth_mse_loss'] = depth_loss
-        metrics['loss'] += depth_loss * self.hparams.depth_weight + extra_loss
+        metrics['loss'] = depth_loss * self.hparams.depth_weight + extra_loss + photo_loss
         return metrics, bg_nerf_rays_present
 
     def _run_validation(self, train_index: int) -> Dict[str, float]:
@@ -663,7 +655,7 @@ class Runner:
                         save_path.mkdir()
                     img.save(str(save_path / '{}.jpg'.format(i)))
                     if self.writer is not None:
-                        self.writer.add_image('val/{}'.format(i), T.ToTensor()(img), train_index)
+                        self.writer.add_image(('val_depth/{}' if is_depth else 'val_rgb/{}').format(i), T.ToTensor()(img), train_index)
 
                     if self.hparams.bg_nerf:
                         if f'bg_rgb_{typ}' in results:

@@ -5,6 +5,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from itertools import cycle
 from pathlib import Path
 from typing import List, Optional, Dict, Tuple, Union, Type
+from importlib_metadata import metadata
 
 import numpy as np
 import pyarrow as pa
@@ -149,7 +150,6 @@ class FilesystemDataset(Dataset):
         - num_chunks: chunk 数量
         - scale_factor: 图像缩放的倍数
         - disk_flush_size: 写入磁盘的最大块大小
-        TODO: check
         """
         # 主设备才需要执行这一部分
         assert ('RANK' not in os.environ) or int(os.environ['LOCAL_RANK']) == 0
@@ -176,7 +176,9 @@ class FilesystemDataset(Dataset):
         """
         根据图片数量选择合适的数据类型 (int16/int32)
         """
-        max_index = max(metadata_items, key=lambda x: x.image_index).image_index
+        max_rgb_index = max(metadata_items, key=lambda x: x.image_index if not x.is_depth else 0).image_index
+        max_depth_index = max(metadata_items, key=lambda x: x.image_index if x.is_depth else 0).image_index
+        max_index = max_rgb_index + max_depth_index
         if max_index <= np.iinfo(np.uint16).max:
             img_indices_dtype = np.uint16
         else:
@@ -193,7 +195,7 @@ class FilesystemDataset(Dataset):
             main_print('Allocating {} chunks to dataset path {}'.format(allocated, chunk_path))
             for j in range(allocated):
                 """
-                写入 parquet 文件 (列式存储)
+                声明 parquet 文件 (列式存储)
                 - img_indices: 图像的索引
                 - rgbs_0 ~ rgbs_2: 图像的 RGB 值
                 - depths: 图像的深度
@@ -288,6 +290,8 @@ class FilesystemDataset(Dataset):
 
                     rgbs = []
                     rays = []
+                    depths = []
+                    depth_mask = []
                     indices = []
                     in_memory_count = 0
 

@@ -14,13 +14,13 @@ def lpips(rgbs: torch.Tensor, target_rgbs: torch.Tensor) -> Dict[str, float]:
     gt = target_rgbs.permute([2, 0, 1]).contiguous()
     pred = rgbs.permute([2, 0, 1]).contiguous()
 
-    lpips_vgg = plips.LPIPS(net='vgg').eval().to(rgbs.device)
+    lpips_vgg = plips.LPIPS(net='vgg', verbose=False).eval().to(rgbs.device)
     lpips_vgg_i = lpips_vgg(gt, pred, normalize=True)
 
-    lpips_alex = plips.LPIPS(net='alex').eval().to(rgbs.device)
+    lpips_alex = plips.LPIPS(net='alex', verbose=False).eval().to(rgbs.device)
     lpips_alex_i = lpips_alex(gt, pred, normalize=True)
 
-    lpips_squeeze = plips.LPIPS(net='squeeze').eval().to(rgbs.device)
+    lpips_squeeze = plips.LPIPS(net='squeeze', verbose=False).eval().to(rgbs.device)
     lpips_squeeze_i = lpips_squeeze(gt, pred, normalize=True)
 
     return {'vgg': lpips_vgg_i.item(), 'alex': lpips_alex_i.item(), 'squeeze': lpips_squeeze_i.item()}
