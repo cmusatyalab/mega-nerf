@@ -7,6 +7,4 @@ batch_size: 256
 no_bg_nerf: True
 
 photo_weight: 1.0
-depth_weight: 1e-4
-sigma_zeroinit: True
-random_seed: 28
+depth_weight: 0.0

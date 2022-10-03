@@ -32,14 +32,9 @@ from mega_nerf.datasets.memory_dataset import MemoryDataset
 from mega_nerf.image_metadata import ImageMetadata
 from mega_nerf.metrics import depth_abs_rel, depth_delta, depth_rmse, depth_rmse_log, depth_sq_rel, psnr, ssim, lpips
 from mega_nerf.misc_utils import main_print, main_tqdm
-from mega_nerf.models import sdf_network
 from mega_nerf.models.model_utils import get_nerf, get_bg_nerf
 from mega_nerf.ray_utils import get_rays, get_ray_directions
 from mega_nerf.rendering import render_rays
-from mega_nerf.sdf_utils import get_sdf_loss
-from mega_nerf.models.sdf_network import SDFNetwork
-from mega_nerf.models.single_variance import SingleVarianceNetwork
-from mega_nerf.models.rendering_network import RenderingNetwork
 
 
 class Runner:
@@ -177,31 +172,6 @@ class Runner:
         if 'RANK' in os.environ:
             self.nerf = torch.nn.parallel.DistributedDataParallel(self.nerf, device_ids=[int(os.environ['LOCAL_RANK'])],
                                                                   output_device=int(os.environ['LOCAL_RANK']))
-        self.sdf_network, self.single_variance_network = None, None
-        if hparams.neus_mode:
-            self.sdf_network = SDFNetwork(d_in=3,
-                                          d_out=1 + hparams.layer_dim,
-                                          d_hidden=hparams.layer_dim,
-                                          n_layers=hparams.layers,
-                                          skip_in=(4,),
-                                          multires=hparams.sdf_multires,
-                                          bias=hparams.sdf_bias,
-                                          scale=hparams.sdf_scale,
-                                          geometric_init=hparams.geometric_init,
-                                          weight_norm=hparams.weight_norm,
-                                          ).to(self.device)
-            self.single_variance_network = SingleVarianceNetwork(init_val=hparams.sv_init_val).to(self.device)
-            if 'RANK' in os.environ:
-                self.nerf = torch.nn.parallel.DistributedDataParallel(self.nerf,
-                                                                      device_ids=[int(os.environ['LOCAL_RANK'])],
-                                                                      output_device=int(os.environ['LOCAL_RANK']))
-                self.sdf_network = torch.nn.parallel.DistributedDataParallel(self.sdf_network,
-                                                                            device_ids=[int(os.environ['LOCAL_RANK'])],
-                                                                            output_device=int(os.environ['LOCAL_RANK']))
-                self.single_variance_network = torch.nn.parallel.DistributedDataParallel(self.single_variance_network,
-                                                                                        device_ids=[int(os.environ['LOCAL_RANK'])],
-                                                                                        output_device=int(os.environ['LOCAL_RANK']))
-
 
         if hparams.bg_nerf:
             """
@@ -295,7 +265,6 @@ class Runner:
             schedulers[key] = ExponentialLR(optimizer,
                                             gamma=self.hparams.lr_decay_factor ** (1 / self.hparams.train_iterations),
                                             last_epoch=train_iterations - 1)
-        self.anneal_end = self.hparams.anneal_end
         self.iter_step = -1
 
         """
@@ -476,8 +445,6 @@ class Runner:
         self.iter_step += 1
         results, bg_nerf_rays_present = render_rays(nerf=self.nerf,
                                                     bg_nerf=self.bg_nerf,
-                                                    sdf_network=self.sdf_network,
-                                                    single_variance_network=self.single_variance_network,
                                                     rays=rays,
                                                     image_indices=image_indices,
                                                     hparams=self.hparams,
@@ -486,8 +453,6 @@ class Runner:
                                                     get_depth=True,
                                                     get_depth_variance=True,
                                                     get_bg_fg_rgb=False,
-                                                    neus_mode=self.hparams.neus_mode,
-                                                    cos_anneal_ratio=self.get_cos_anneal_ratio()
                                                     )
         typ = 'fine' if 'rgb_fine' in results else 'coarse'
         # print(f"rays shape = {rays.shape}, rendered rgb shape = {results[f'rgb_{typ}'].shape}, rendered depth shape = {results[f'depth_{typ}'].shape}")
@@ -502,16 +467,10 @@ class Runner:
             'depth_variance': depth_variance,
         }
 
-        if self.hparams.neus_mode:
-            photo_loss = F.l1_loss(results[f'rgb_{typ}'] * color_masks, rgbs * color_masks, reduction='mean') * self.hparams.photo_weight
-            eikonal_loss = results[f'gradient_error_{typ}'] * self.hparams.eikonal_weight
-            metrics['eikonal_loss'] = eikonal_loss
-            extra_loss = eikonal_loss
-        else:
-            photo_loss = F.mse_loss(results[f'rgb_{typ}'] * color_masks, rgbs * color_masks, reduction='mean') * self.hparams.photo_weight
-            extra_loss = 0
+        photo_loss = F.mse_loss(results[f'rgb_{typ}'] * color_masks, rgbs * color_masks, reduction='mean') * self.hparams.photo_weight
+        extra_loss = 0
 
-        depths_metric, render_depth_metric = (depths * depth_masks * self.pose_scale_factor).view(-1), \
+        depths_metric, render_depth_metric = (depths * self.pose_scale_factor).view(-1), \
             (results[f'depth_{typ}'].reshape(-1, 1) * depth_masks * self.pose_scale_factor).view(-1)
         metrics.update({
             "train/RMSE": depth_rmse(render_depth_metric, depths_metric),
@@ -530,10 +489,6 @@ class Runner:
 
     def _run_validation(self, train_index: int) -> Dict[str, float]:
         self.nerf.eval()
-        if self.hparams.neus_mode:
-            self.bg_nerf.eval()
-            self.sdf_network.eval()
-            self.single_variance_network.eval()
 
         val_metrics = defaultdict(float)
         base_tmp_path = None
@@ -569,7 +524,7 @@ class Runner:
                         assert viz_image.shape[-1] == 3, f"color image with shape {viz_image.shape}"
                     img_w, img_h = viz_image.shape[0], viz_image.shape[1]
 
-                with torch.inference_mode(mode=not self.hparams.neus_mode):
+                with torch.inference_mode(mode=True):
                     results, _ = self.render_image(metadata_item)
                 with torch.inference_mode():
                     typ = 'fine' if 'rgb_fine' in results else 'coarse'
@@ -761,8 +716,6 @@ class Runner:
 
             for i in range(0, rays.shape[0], self.hparams.image_pixel_batch_size):
                 result_batch, _ = render_rays(nerf=nerf, bg_nerf=bg_nerf,
-                                              sdf_network=self.sdf_network,
-                                              single_variance_network=self.single_variance_network,
                                               rays=rays[i:i + self.hparams.image_pixel_batch_size],
                                               image_indices=image_indices[
                                                             i:i + self.hparams.image_pixel_batch_size] if self.hparams.appearance_dim > 0 else None,
@@ -772,7 +725,7 @@ class Runner:
                                               get_depth=True,
                                               get_depth_variance=False,
                                               get_bg_fg_rgb=True,
-                                              neus_mode=self.hparams.neus_mode)
+                                              )
 
                 with torch.no_grad():
                     for key, value in result_batch.items():
@@ -809,7 +762,7 @@ class Runner:
         if rgbs is not None:
             images = (rgbs * 255, result_rgbs * 255)
         else:
-            images = (torch.zeros_like(torch.tensor(result_rgbs)), result_rgbs)
+            images = (torch.zeros_like(torch.tensor(result_rgbs)), result_rgbs * 255)
         ret = np.concatenate([np.concatenate(images, axis=1), np.concatenate(depth, axis=1)], axis=0).astype(np.uint8)
         return Image.fromarray(ret)
 
@@ -821,7 +774,6 @@ class Runner:
 
         mi = torch.quantile(to_use, 0.05)
         ma = torch.quantile(to_use, 0.95)
-
         scalar_tensor = (scalar_tensor - mi) / max(ma - mi, 1e-8)  # normalize to 0~1
         scalar_tensor = scalar_tensor.clamp_(0, 1)
 
@@ -961,9 +913,3 @@ class Runner:
         version = 0 if len(existing_versions) == 0 else max(existing_versions) + 1
         experiment_path = exp_dir / str(version)
         return experiment_path
-
-    def get_cos_anneal_ratio(self,):
-        if self.anneal_end == 0.0:
-            return 1.0
-        else:
-            return np.min([1.0, self.iter_step / self.anneal_end])

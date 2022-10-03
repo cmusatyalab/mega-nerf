@@ -7,7 +7,6 @@ from typing import Optional, Dict, Callable, Tuple
 import torch
 import torch.nn.functional as F
 from torch import nn
-from mega_nerf.sdf_utils import sdf2weight
 from mega_nerf.spherical_harmonics import eval_sh
 
 TO_COMPOSITE = {'rgb', 'depth'}
@@ -47,301 +46,8 @@ def sample_pdf(bins, weights, n_samples, det=False):
     return samples
 
 
-def up_sample(rays_o, rays_d, z_vals, sdf, n_importance, inv_s):
-    """
-    Up sampling give a fixed inv_s
-    from NeuS
-    """
-    batch_size, n_samples = z_vals.shape
-    pts = rays_o[:, None, :] + rays_d[:, None, :] * z_vals[..., :, None]  # n_rays, n_samples, 3
-    radius = torch.linalg.norm(pts, ord=2, dim=-1, keepdim=False)
-    inside_sphere = (radius[:, :-1] < 1.0) | (radius[:, 1:] < 1.0)
-    sdf = sdf.reshape(batch_size, n_samples)
-    prev_sdf, next_sdf = sdf[:, :-1], sdf[:, 1:]
-    prev_z_vals, next_z_vals = z_vals[:, :-1], z_vals[:, 1:]
-    mid_sdf = (prev_sdf + next_sdf) * 0.5
-    cos_val = (next_sdf - prev_sdf) / (next_z_vals - prev_z_vals + 1e-5)
-
-    # ----------------------------------------------------------------------------------------------------------
-    # Use min value of [ cos, prev_cos ]
-    # Though it makes the sampling (not rendering) a little bit biased, this strategy can make the sampling more
-    # robust when meeting situations like below:
-    #
-    # SDF
-    # ^
-    # |\          -----x----...
-    # | \        /
-    # |  x      x
-    # |---\----/-------------> 0 level
-    # |    \  /
-    # |     \/
-    # |
-    # ----------------------------------------------------------------------------------------------------------
-    prev_cos_val = torch.cat([torch.zeros([batch_size, 1]).to(pts.device), cos_val[:, :-1]], dim=-1)
-    cos_val = torch.stack([prev_cos_val, cos_val], dim=-1)
-    cos_val, _ = torch.min(cos_val, dim=-1, keepdim=False)
-    cos_val = cos_val.clip(-1e3, 0.0) * inside_sphere
-
-    dist = (next_z_vals - prev_z_vals)
-    prev_esti_sdf = mid_sdf - cos_val * dist * 0.5
-    next_esti_sdf = mid_sdf + cos_val * dist * 0.5
-    prev_cdf = torch.sigmoid(prev_esti_sdf * inv_s)
-    next_cdf = torch.sigmoid(next_esti_sdf * inv_s)
-    alpha = (prev_cdf - next_cdf + 1e-5) / (prev_cdf + 1e-5)
-    weights = alpha * torch.cumprod(
-        torch.cat([torch.ones([batch_size, 1]).to(pts.device), 1. - alpha + 1e-7], -1), -1)[:, :-1]
-
-    z_samples = sample_pdf(z_vals, weights, n_importance, det=True).detach()
-    return z_samples
-
-def cat_z_vals(sdf_network, rays_o, rays_d, z_vals, new_z_vals, sdf, last=False):
-    """
-    from NeuS
-    """
-    batch_size, n_samples = z_vals.shape
-    _, n_importance = new_z_vals.shape
-    pts = rays_o[:, None, :] + rays_d[:, None, :] * new_z_vals[..., :, None]
-    z_vals = torch.cat([z_vals, new_z_vals], dim=-1)
-    z_vals, index = torch.sort(z_vals, dim=-1)
-
-    if not last:
-        new_sdf = sdf_network.sdf(pts.reshape(-1, 3)).reshape(batch_size, n_importance)
-        sdf = torch.cat([sdf, new_sdf], dim=-1)
-        xx = torch.arange(batch_size)[:, None].expand(batch_size, n_samples + n_importance).reshape(-1)
-        index = index.reshape(-1)
-        sdf = sdf[(xx, index)].reshape(batch_size, n_samples + n_importance)
-
-    return z_vals, sdf
-
-
-def neus_render_rays(rendering_network: nn.Module,
-                     bg_nerf: nn.Module,
-                     sdf_network: nn.Module,
-                     single_variance_network: nn.Module,
-                     rays: torch.Tensor,
-                     image_indices: Optional[torch.Tensor],
-                     hparams: Namespace,
-                     get_depth: bool,
-                     get_depth_variance: bool,
-                     get_bg_fg_rgb: bool,
-                     cos_anneal_ratio: float=0.0,
-    ):
-    """ 按照 NeuS 的渲染方式, 使用 NeRF++ 的前后景模式进行渲染
-    Args:
-        nerf: 渲染前景颜色的 NeRF 模型 (只有后半段, 接收 SDF 网络输出的 feature 向量)
-        bg_nerf: NeRF++ 模型 
-        sdf_network: SDF 网络, 输出的是 SDF 值 + feature 向量
-        single_variance_network: sdf2weight 时的方差, 在反向传播过程中会逐渐缩小
-        rays: (batch_size, 8) 的光线向量
-        image_indices: (batch_size,) 的图像索引
-        hparams: 参数
-        get_depth: 是否获取深度图
-        get_depth_variance: 是否获取深度图的方差
-        get_bg_fg_rgb: 是否获取前景和背景的颜色
-    Returns:
-    """
-    batch_size = rays.shape[0]
-    device=rays.device
-    rays_o, rays_d = rays[:, :3], rays[:, 3:6]
-    near, far = rays[:, 6:7], rays[:, 7:8]
-    sample_dist = 2.0 / hparams.coarse_samples
-    z_vals = torch.linspace(0.0, 1.0, hparams.coarse_samples).to(device)
-    z_vals = near + (far - near) * z_vals[None, :]
-
-    z_vals_outside = None
-    if hparams.bg_samples > 0:
-        z_vals_outside = torch.linspace(1e-3, 1.0 - 1.0 / (hparams.bg_samples + 1.0), hparams.bg_samples).to(device)
-    n_samples = hparams.coarse_samples
-    perturb = hparams.perturb
-
-    if perturb > 0:
-        t_rand = (torch.rand([batch_size, 1]) - 0.5).to(device)
-        z_vals += t_rand * 2.0 / n_samples
-
-        if hparams.bg_samples > 0:
-            mids = 0.5 * (z_vals_outside[:-1] + z_vals_outside[1:])
-            upper = torch.cat([mids, z_vals_outside[..., -1:]], -1)
-            lower = torch.cat([z_vals_outside[..., :1], mids], -1)
-            t_rand = torch.rand([batch_size, z_vals_outside.shape[-1]]).to(device)
-            z_vals_outside = lower[None, :] + (upper - lower)[None, :] * t_rand[:]
-    
-    if hparams.bg_samples > 0:
-        z_vals_outside = far / torch.flip(z_vals_outside, dims=[-1]) + 1.0 / n_samples
-    
-    if hparams.fine_samples > 0:
-        with torch.no_grad():
-            pts = rays_o[:, None, :] + rays_d[:, None, :] * z_vals[..., :, None]
-            sdf = sdf_network.sdf(pts.reshape(-1, 3)).reshape(batch_size, n_samples)
-            sdf_coarse = sdf
-
-            z_vals_coarse = z_vals
-            for i in range(hparams.up_sample_steps):
-                new_z_vals = up_sample(rays_o,
-                                        rays_d,
-                                        z_vals,
-                                        sdf,
-                                        hparams.fine_samples // hparams.up_sample_steps,
-                                        64 * 2 ** i
-                )
-                z_vals, sdf = cat_z_vals(sdf_network, rays_o, rays_d, z_vals, new_z_vals, sdf,
-                                            last=(i + 1 == hparams.up_sample_steps))
-            
-            n_samples = hparams.coarse_samples + hparams.fine_samples
-
-    def render_outside(rays_o, rays_d, z_vals, sample_dist, nerf, background_rgb=None):
-        batch_size, n_samples = z_vals.shape
-        dists = z_vals[..., 1:] - z_vals[..., :-1]
-        dists = torch.cat([dists, torch.Tensor([sample_dist]).expand(dists[..., :1].shape).to(dists.device)] , -1)
-        mid_z_vals = z_vals + dists * 0.5
-
-        pts = rays_o[:, None, :] + rays_d[:, None, :] * mid_z_vals[..., :, None]
-        dis_to_center = torch.linalg.norm(pts, ord=2, dim=-1, keepdim=True)
-        pts = torch.cat([pts / dis_to_center, 1.0 / dis_to_center], -1)
-
-        dirs = rays_d[:, None, :].expand(batch_size, n_samples, 3)
-        pts = pts.reshape(-1, 3 + int(hparams.bg_samples > 0))
-        dirs = dirs.reshape(-1, 3)
-
-        out = nerf(torch.cat([pts, dirs], -1), neus_mode=True)
-        sampled_color = out[:, :-1]
-        density = out[:, -1:]
-        sampled_color = torch.sigmoid(sampled_color)
-        alpha = 1.0 - torch.exp(-F.softplus(density.reshape(batch_size, n_samples)) * dists)
-        alpha = alpha.reshape(batch_size, n_samples)
-        weights = alpha * torch.cumprod(torch.cat([torch.ones([batch_size, 1]).to(alpha.device), 1. - alpha + 1e-7], -1), -1)[:, :-1]
-        sampled_color = sampled_color.reshape(batch_size, n_samples, 3)
-        color = (weights[:, :, None] * sampled_color).sum(dim=1)
-        if background_rgb is not None:
-            color = color + background_rgb * (1.0 - weights.sum(dim=-1, keepdim=True))
-        return {
-            'color': color,
-            'sampled_color': sampled_color,
-            'weights': weights,
-            'alpha': alpha,
-        }
-
-    def render_core(rays_o, rays_d, z_vals, sample_dist, sdf_network,
-                    deviation_network, color_network, background_alpha=None,
-                    background_sampled_color=None, background_rgb=None,
-                    cos_anneal_ratio=0.0):
-        batch_size, n_samples = z_vals.shape
-
-        # Section length
-        dists = z_vals[..., 1:] - z_vals[..., :-1]
-        dists = torch.cat([dists, torch.Tensor([sample_dist]).expand(dists[..., :1].shape).to(dists.device)], -1)
-        mid_z_vals = z_vals + dists * 0.5
-
-        # Section midpoints
-        pts = rays_o[:, None, :] + rays_d[:, None, :] * mid_z_vals[..., :, None]  # n_rays, n_samples, 3
-        dirs = rays_d[:, None, :].expand(pts.shape)
-
-        pts = pts.reshape(-1, 3)
-        dirs = dirs.reshape(-1, 3)
-
-        sdf_nn_output = sdf_network(pts)
-        sdf = sdf_nn_output[:, :1]
-        feature_vector = sdf_nn_output[:, 1:]
-
-        gradients = sdf_network.gradient(pts).squeeze()
-        sampled_color = color_network(pts, gradients, dirs, feature_vector).reshape(batch_size, n_samples, 3)
-
-        inv_s = deviation_network(torch.zeros([1, 3]))[:, :1].clip(1e-6, 1e6)           # Single parameter
-        inv_s = inv_s.expand(batch_size * n_samples, 1).to(gradients.device)
-
-        true_cos = (dirs * gradients).sum(-1, keepdim=True)
-
-        # "cos_anneal_ratio" grows from 0 to 1 in the beginning training iterations. The anneal strategy below makes
-        # the cos value "not dead" at the beginning training iterations, for better convergence.
-        iter_cos = -(F.relu(-true_cos * 0.5 + 0.5) * (1.0 - cos_anneal_ratio) +
-                     F.relu(-true_cos) * cos_anneal_ratio)  # always non-positive
-
-        # Estimate signed distances at section points
-        estimated_next_sdf = sdf + iter_cos * dists.reshape(-1, 1) * 0.5
-        estimated_prev_sdf = sdf - iter_cos * dists.reshape(-1, 1) * 0.5
-
-        prev_cdf = torch.sigmoid(estimated_prev_sdf * inv_s)
-        next_cdf = torch.sigmoid(estimated_next_sdf * inv_s)
-
-        p = prev_cdf - next_cdf
-        c = prev_cdf
-
-        alpha = ((p + 1e-5) / (c + 1e-5)).reshape(batch_size, n_samples).clip(0.0, 1.0)
-
-        pts_norm = torch.linalg.norm(pts, ord=2, dim=-1, keepdim=True).reshape(batch_size, n_samples)
-        inside_sphere = (pts_norm < 1.0).float().detach()
-        relax_inside_sphere = (pts_norm < 1.2).float().detach()
-
-        # Render with background
-        if background_alpha is not None:
-            alpha = alpha * inside_sphere + background_alpha[:, :n_samples] * (1.0 - inside_sphere)
-            alpha = torch.cat([alpha, background_alpha[:, n_samples:]], dim=-1)
-            sampled_color = sampled_color * inside_sphere[:, :, None] +\
-                            background_sampled_color[:, :n_samples] * (1.0 - inside_sphere)[:, :, None]
-            sampled_color = torch.cat([sampled_color, background_sampled_color[:, n_samples:]], dim=1)
-
-        weights = alpha * torch.cumprod(torch.cat([torch.ones([batch_size, 1]).to(alpha.device), 1. - alpha + 1e-7], -1), -1)[:, :-1]
-        weights_sum = weights.sum(dim=-1, keepdim=True)
-
-        color = (sampled_color * weights[:, :, None]).sum(dim=1)
-        if background_rgb is not None:    # Fixed background, usually black
-            color = color + background_rgb * (1.0 - weights_sum)
-
-        # Eikonal loss
-        gradient_error = (torch.linalg.norm(gradients.reshape(batch_size, n_samples, 3), ord=2,
-                                            dim=-1) - 1.0) ** 2
-        gradient_error = (relax_inside_sphere * gradient_error).sum() / (relax_inside_sphere.sum() + 1e-5)
-
-        return {
-            'sampled_color': sampled_color,
-            'color': color,
-            'sdf': sdf,
-            'dists': dists,
-            'gradients': gradients.reshape(batch_size, n_samples, 3),
-            's_val': 1.0 / inv_s,
-            'mid_z_vals': mid_z_vals,
-            'weights': weights,
-            'cdf': c.reshape(batch_size, n_samples),
-            'gradient_error': gradient_error,
-            'inside_sphere': inside_sphere,
-            'alpha': alpha,
-        }
-
-    if hparams.bg_samples > 0:
-        z_vals_feed = torch.cat([z_vals, z_vals_outside], dim=-1)
-        z_vals_feed, _ = torch.sort(z_vals_feed, dim=-1)
-        ret_outside = render_outside(rays_o, rays_d, z_vals_feed, sample_dist, bg_nerf)
-        
-        background_sampled_color = ret_outside['sampled_color']
-        background_alpha = ret_outside['alpha']
-    
-    ret_fine = render_core(rays_o, rays_d, z_vals, sample_dist, sdf_network, single_variance_network, rendering_network,
-                                 background_sampled_color=background_sampled_color, background_alpha=background_alpha,
-                                 cos_anneal_ratio=cos_anneal_ratio)
-    
-    z_vals_depth = z_vals_feed if hparams.bg_samples > 0 else z_vals
-    bg_lambda = torch.cumprod(1 - ret_fine['alpha'] + 1e-8, dim=-1)[..., -1]
-    depth = torch.sum(ret_fine['weights'] * z_vals_depth, dim=-1)
-    depth_variance = (ret_fine['weights'] * (z_vals_depth- depth.unsqueeze(1)) ** 2).sum(axis=-1)
-    return {
-        'zvals_coarse': z_vals_coarse,
-        'zvals_fine': z_vals,
-        'raw_rgb_fine': ret_fine['sampled_color'],
-        'rgb_fine': ret_fine['color'],
-        'raw_sigma_coarse': sdf_coarse,
-        'raw_sigma_fine': ret_fine['sdf'],
-        'bg_lambda_fine': bg_lambda,
-        'weights_fine': ret_fine['weights'],
-        'depth_fine': depth,
-        'depth_variance_fine': depth_variance,
-        'gradient_error': ret_fine['gradient_error'],
-        'gradient_fine': ret_fine['gradients'],
-    }, True
-
-
 def render_rays(nerf: nn.Module,
                 bg_nerf: Optional[nn.Module],
-                sdf_network: Optional[nn.Module],
-                single_variance_network: Optional[nn.Module],
                 rays: torch.Tensor,
                 image_indices: Optional[torch.Tensor],
                 hparams: Namespace,
@@ -350,8 +56,6 @@ def render_rays(nerf: nn.Module,
                 get_depth: bool,
                 get_depth_variance: bool,
                 get_bg_fg_rgb: bool,
-                neus_mode: bool,
-                cos_anneal_ratio: float=0.0,
                 ) -> Tuple[Dict[str, torch.Tensor], bool]:
     """
     根据输入的 rays, 返回对应的渲染结果
@@ -373,11 +77,7 @@ def render_rays(nerf: nn.Module,
     - get_depth: 是否获取深度图
     - get_depth_variance: 是否获取深度图的方差
     - get_bg_fg_rgb: 是否获取前景背景渲染图片
-    - cos_anneal_ratio: float
     """
-    if neus_mode:
-        assert sphere_center is None and sphere_radius is None
-        # return neus_render_rays(nerf, bg_nerf, sdf_network, single_variance_network, rays, image_indices, hparams, get_depth, get_depth_variance, get_bg_fg_rgb, cos_anneal_ratio=cos_anneal_ratio)
     N_rays = rays.shape[0]
 
     rays_o, rays_d = rays[:, 0:3], rays[:, 3:6]  # both (N_rays, 3)
@@ -423,7 +123,6 @@ def render_rays(nerf: nn.Module,
                                                     cluster_2d)
 
             bg_results = _get_results(nerf=bg_nerf,
-                                      deviation_net=single_variance_network,
                                       rays_d=rays_d[rays_with_bg],
                                       image_indices=image_indices[rays_with_bg] if image_indices is not None else None,
                                       hparams=hparams,
@@ -441,8 +140,6 @@ def render_rays(nerf: nn.Module,
                                                                                          sphere_center, sphere_radius,
                                                                                          include_xyz_real,
                                                                                          cluster_2d),
-                                      neus_mode=neus_mode,
-                                      cos_anneal_ratio=cos_anneal_ratio,
                                       )
 
     else:
@@ -457,7 +154,6 @@ def render_rays(nerf: nn.Module,
 
     xyz_coarse = rays_o + rays_d * z_vals.unsqueeze(-1)
     results = _get_results(nerf=nerf,
-                           deviation_net=single_variance_network,
                            rays_d=rays_d,
                            image_indices=image_indices,
                            hparams=hparams,
@@ -470,8 +166,6 @@ def render_rays(nerf: nn.Module,
                            flip=False,
                            depth_real=None,
                            xyz_fine_fn=lambda fine_z_vals: (rays_o + rays_d * fine_z_vals.unsqueeze(-1), None),
-                           neus_mode=neus_mode,
-                           cos_anneal_ratio=cos_anneal_ratio,
                            )
 
     if bg_nerf is not None:
@@ -525,7 +219,6 @@ def render_rays(nerf: nn.Module,
         bg_pts, depth_real = _depth2pts_outside(rays_o[:1], rays_d[:1], bg_z_vals,
                                                 sphere_center, sphere_radius, include_xyz_real, cluster_2d)
         grad_results = _get_results(nerf=bg_nerf,
-                                    deviation_net=single_variance_network,
                                     rays_d=rays_d[:1],
                                     image_indices=image_indices[:1] if image_indices is not None else None,
                                     hparams=hparams,
@@ -543,8 +236,6 @@ def render_rays(nerf: nn.Module,
                                                                                        sphere_center, sphere_radius,
                                                                                        include_xyz_real,
                                                                                        cluster_2d),
-                                    neus_mode=neus_mode,
-                                    cos_anneal_ratio=cos_anneal_ratio,
                                     )
         results[f'rgb_{types[0]}'][:0] += 0 * grad_results[f'rgb_{types[0]}']
         bg_nerf_rays_present = True
@@ -553,7 +244,6 @@ def render_rays(nerf: nn.Module,
 
 
 def _get_results(nerf: nn.Module,
-                 deviation_net: nn.Module,
                  rays_d: torch.Tensor,
                  image_indices: Optional[torch.Tensor],
                  hparams: Namespace,
@@ -566,8 +256,6 @@ def _get_results(nerf: nn.Module,
                  flip: bool,
                  depth_real: Optional[torch.Tensor],
                  xyz_fine_fn: Callable[[torch.Tensor], Tuple[torch.Tensor, Optional[torch.Tensor]]],
-                 neus_mode: bool,
-                 cos_anneal_ratio: float,
                  ) \
         -> Dict[str, torch.Tensor]:
     results = {}
@@ -578,7 +266,6 @@ def _get_results(nerf: nn.Module,
     _inference(results=results,
                typ='coarse',
                nerf=nerf,
-               deviation_net=deviation_net,
                rays_d=rays_d,
                image_indices=image_indices,
                hparams=hparams,
@@ -592,8 +279,6 @@ def _get_results(nerf: nn.Module,
                get_bg_lambda=get_bg_lambda and hparams.use_cascade,
                flip=flip,
                depth_real=depth_real,
-               neus_mode=neus_mode,
-               cos_anneal_ratio=cos_anneal_ratio,
                )
 
     if hparams.fine_samples > 0:  # sample points for fine model
@@ -614,7 +299,6 @@ def _get_results(nerf: nn.Module,
         _inference(results=results,
                    typ='fine',
                    nerf=nerf,
-                   deviation_net=deviation_net,
                    rays_d=rays_d,
                    image_indices=image_indices,
                    hparams=hparams,
@@ -628,8 +312,6 @@ def _get_results(nerf: nn.Module,
                    get_bg_lambda=get_bg_lambda,
                    flip=flip,
                    depth_real=depth_real_fine,
-                   neus_mode=neus_mode,
-                   cos_anneal_ratio=cos_anneal_ratio,
                    )
 
         for key in INTERMEDIATE_KEYS:
@@ -642,7 +324,6 @@ def _get_results(nerf: nn.Module,
 def _inference(results: Dict[str, torch.Tensor],
                typ: str,
                nerf: nn.Module,
-               deviation_net: nn.Module,
                rays_d: torch.Tensor,
                image_indices: Optional[torch.Tensor],
                hparams: Namespace,
@@ -656,8 +337,6 @@ def _inference(results: Dict[str, torch.Tensor],
                get_bg_lambda: bool,
                flip: bool,
                depth_real: Optional[torch.Tensor],
-               neus_mode: bool,
-               cos_anneal_ratio: float,
                ):
     depth_real = None
     N_rays_ = xyz.shape[0]
@@ -691,9 +370,9 @@ def _inference(results: Dict[str, torch.Tensor],
             sigma_noise = torch.rand(len(xyz_chunk), 1, device=xyz_chunk.device) if nerf.training else None
 
             if hparams.use_cascade:
-                model_chunk, gradient = nerf(typ == 'coarse', xyz_chunk, sigma_noise=sigma_noise, neus_mode=neus_mode)
+                model_chunk, gradient = nerf(typ == 'coarse', xyz_chunk, sigma_noise=sigma_noise)
             else:
-                model_chunk, gradient = nerf(xyz_chunk, sigma_noise=sigma_noise, neus_mode=neus_mode)
+                model_chunk, gradient = nerf(xyz_chunk, sigma_noise=sigma_noise)
 
             if hparams.sh_deg is not None:
                 rgb = torch.sigmoid(
@@ -719,18 +398,15 @@ def _inference(results: Dict[str, torch.Tensor],
             sigma_noise = torch.rand(len(xyz_chunk), 1, device=xyz_chunk.device) if nerf.training else None
 
             if hparams.use_cascade:
-                model_chunk, gradient = nerf(typ == 'coarse', xyz_chunk, sigma_noise=sigma_noise, neus_mode=neus_mode)
+                model_chunk, gradient = nerf(typ == 'coarse', xyz_chunk, sigma_noise=sigma_noise)
             else:
-                model_chunk, gradient = nerf(xyz_chunk, sigma_noise=sigma_noise, neus_mode=neus_mode)
+                model_chunk, gradient = nerf(xyz_chunk, sigma_noise=sigma_noise)
 
             out_chunks += [model_chunk]
             out_gradients += [gradient]
 
     out = torch.cat(out_chunks, 0)
     out = out.view(N_rays_, N_samples_, out.shape[-1])
-    if neus_mode:
-        gradients = torch.cat(out_gradients, 0)
-        gradients = gradients.view(N_rays_, N_samples_, 3)
 
     rgbs = out[..., :3]  # (N_rays, N_samples_, 3)
     sigmas = out[..., 3]  # (N_rays, N_samples_)
@@ -744,14 +420,6 @@ def _inference(results: Dict[str, torch.Tensor],
             torch.gather(torch.cat((rgbs[..., 2], results['raw_rgb_coarse'][..., 2]), 1), 1, ordering).unsqueeze(-1))
             , -1)
         sigmas = torch.gather(torch.cat((sigmas, results['raw_sigma_coarse']), 1), 1, ordering)
-        if neus_mode:
-            coarse_gradient = results['gradient_coarse'].view(N_rays_, -1, 3)
-            gradients = torch.cat((
-                torch.gather(torch.cat((gradients[..., 0], coarse_gradient[..., 0]), 1), 1, ordering).unsqueeze(-1),
-                torch.gather(torch.cat((gradients[..., 1], coarse_gradient[..., 1]), 1), 1, ordering).unsqueeze(-1),
-                torch.gather(torch.cat((gradients[..., 2], coarse_gradient[..., 2]), 1), 1, ordering).unsqueeze(-1),
-            ), -1)
-            N_samples_ = gradients.shape[1]
 
         if depth_real is not None:
             depth_real = torch.gather(torch.cat((depth_real, results['depth_real_coarse']), 1), 1,
@@ -764,35 +432,7 @@ def _inference(results: Dict[str, torch.Tensor],
         deltas = z_vals[:, 1:] - z_vals[:, :-1]  # (N_rays, N_samples_-1)
 
     deltas = torch.cat([deltas, last_delta], -1)  # (N_rays, N_samples_)
-    if neus_mode:
-        gradients = gradients.squeeze().reshape(-1, 3)
-        inv_s = deviation_net(torch.zeros([1, 3]))[:, :1].clip(1e-6, 1e6)
-        inv_s = inv_s.expand(N_rays_ * N_samples_, 1).to(gradients.device)
-        dirs = rays_d.expand(N_rays_, N_samples_, 3).reshape(-1, 3)
-        true_cos = (dirs * gradients).sum(-1, keepdim=True)
-
-        # "cos_anneal_ratio" grows from 0 to 1 in the beginning training iterations. The anneal strategy below makes
-        # the cos value "not dead" at the beginning training iterations, for better convergence.
-        iter_cos = -(F.relu(-true_cos * 0.5 + 0.5) * (1.0 - cos_anneal_ratio) +
-                     F.relu(-true_cos) * cos_anneal_ratio)  # always non-positive
-
-        # Estimate signed distances at section points
-        estimated_next_sdf = sigmas.reshape(-1, 1) + iter_cos * deltas.reshape(-1, 1) * 0.5
-        estimated_prev_sdf = sigmas.reshape(-1, 1) - iter_cos * deltas.reshape(-1, 1) * 0.5
-
-        prev_cdf = torch.sigmoid(estimated_prev_sdf * inv_s)
-        next_cdf = torch.sigmoid(estimated_next_sdf * inv_s)
-
-        p = prev_cdf - next_cdf
-        c = prev_cdf
-
-        alphas = ((p + 1e-5) / (c + 1e-5)).reshape(N_rays_, N_samples_).clip(0.0, 1.0)
-        results[f'gradient_{typ}'] = gradients
-
-        gradient_error = (torch.linalg.norm(gradients.reshape(N_rays_, N_samples_, 3), ord=2, dim=-1) - 1.0) ** 2
-        results[f'gradient_error_{typ}'] = gradient_error.mean()
-    else:
-        alphas = 1 - torch.exp(-deltas * sigmas)  # (N_rays, N_samples_)
+    alphas = 1 - torch.exp(-deltas * sigmas)  # (N_rays, N_samples_)
 
     T = torch.cumprod(1 - alphas + 1e-8, -1)
     if get_bg_lambda:
@@ -801,7 +441,6 @@ def _inference(results: Dict[str, torch.Tensor],
     T = torch.cat((torch.ones_like(T[..., 0:1]), T[..., :-1]), dim=-1)  # [..., N_samples]
 
     weights = alphas * T  # (N_rays, N_samples_)
-    # weights = sdf2weight(z_vals, sigmas)
 
     if get_weights:
         results[f'weights_{typ}'] = weights

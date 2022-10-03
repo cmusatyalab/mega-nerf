@@ -100,30 +100,9 @@ def get_opts_base():
     parser.add_argument('--detect_anomalies', default=False, action='store_true')
     parser.add_argument('--random_seed', type=int, default=42)
 
-    # Neural RGB-D
     parser.add_argument('--photo_weight', type=float, default=1.0, help='weight of photo loss')
     parser.add_argument('--depth_weight', type=float, default=1.0, help='weight for depth loss')
-    parser.add_argument('--eikonal_weight', type=float, default=1.0, help='weight of eikonal loss')
-    parser.add_argument('--sdf_weight', type=float, default=1.0, help='weight of sdf loss')
 
-    # NeuS
-    parser.add_argument('--neus_mode', default=False, action="store_true", dest='neus_mode')
-    parser.add_argument('--sdf_multires', type=int, default=6)
-    parser.add_argument('--sdf_bias', type=float, default=0.5)
-    parser.add_argument('--sdf_scale', type=float, default=3.0)
-    parser.add_argument('--no_geometric_init', default=True, dest='geometric_init', action='store_false')
-    parser.add_argument('--no_weight_norm', default=True, dest='weight_norm', action='store_false')
-    parser.add_argument('--sv_init_val', type=float, default=0.3)
-    parser.add_argument('--bg_samples', type=int, default=32)
-    parser.add_argument('--up_sample_steps', type=int, default=4)
-
-    parser.add_argument('--rendernet_d_in', type=int, default=9, help='input dimension of render net')
-    parser.add_argument('--rendernet_d_out', type=int, default=3, help='output dimension of render net')
-    parser.add_argument('--rendernet_d_hidden', type=int, default=256, help='hidden dimension of render net')
-    parser.add_argument('--rendernet_n_layers', type=int, default=4, help='number of layers in render net')
-    parser.add_argument('--rendernet_multires', type=int, default=4, help='number of multiresolution levels in render net positional embeddings')
-
-    parser.add_argument('--anneal_end', type=int, default=50000)
     parser.add_argument('--sigma_zeroinit', default=False, action='store_true')
 
     parser.add_argument('--depth_track', type=str, help='depth track name')
