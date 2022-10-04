@@ -528,9 +528,8 @@ class Runner:
                     results, _ = self.render_image(metadata_item)
                 with torch.inference_mode():
                     typ = 'fine' if 'rgb_fine' in results else 'coarse'
+                    viz_result_rgbs = results[f'rgb_{typ}'].view((img_w, img_h, 3)).cpu()
                     if not is_depth:
-                        viz_result_rgbs = results[f'rgb_{typ}'].view((img_w, img_h, 3)).cpu()
-
                         eval_rgbs = viz_image[:, viz_image.shape[1] // 2:].contiguous()
                         eval_result_rgbs = viz_result_rgbs[:, viz_image.shape[1] // 2:].contiguous()
 

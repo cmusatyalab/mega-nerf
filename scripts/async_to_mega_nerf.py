@@ -174,8 +174,9 @@ def save_track(name, poses, positions, image_names):
                 cv2.imwrite(os.path.join(split_dir,'rgbs','{0:06d}.jpg'.format(idx)),color)
                 image = color
             else:
-                depth_path = image_names[i]
+                depth_path = image_names[idx]
                 depth, scale = pfm_utils.read_pfm(depth_path)
+                depth = np.flip(depth, axis=0)
                 pfm_utils.write_pfm(os.path.join(split_dir, name, '{0:06d}.pfm'.format(idx)), depth, scale)
                 image = depth
 
@@ -195,7 +196,7 @@ def save_track(name, poses, positions, image_names):
                 'distortion': torch.FloatTensor(distortion),
                 'timestamp': torch.tensor(float(image_names[idx].stem),dtype=torch.float64)
             }, os.path.join(split_dir,f'metadata_{name}',metadata_name))
-            f.write('{},{}\n'.format('{0:06d}.jpg'.format(idx), metadata_name))
+            f.write('{},{}\n'.format(('{0:06d}.jpg' if name == 'rgb' else '{0:06d}.pfm').format(idx), metadata_name))
 
 print("exporting rgb data")
 save_track('rgb', rgb_pose, rgb_positions, rgb_names)
