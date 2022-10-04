@@ -854,12 +854,12 @@ class Runner:
             assert image_path is not None
         else:
             depth_path = None
-            for extension in ['.pfm', '.PFM']:
-                candidate = metadata_path.parent.parent / f'depth_{depth_name}' / '{}{}'.format(metadata_path.stem, extension)
+            for extension in ['.jpg', '.JPG']:
+                candidate = metadata_path.parent.parent / f'depthvis_{depth_name}' / '{}{}'.format(metadata_path.stem, extension)
                 if candidate.exists():
                     depth_path = candidate
                     break
-            assert depth_path is not None, metadata_path.parent.parent / f'depth_{depth_name}' / '{}{}'.format(metadata_path.stem, extension)
+            assert depth_path is not None, metadata_path.parent.parent / f'depthvis_{depth_name}' / '{}{}'.format(metadata_path.stem, extension)
             image_path = depth_path
 
         """
@@ -898,7 +898,7 @@ class Runner:
         """
         当在 hparams 中指定 all_val 为真时, 不使用 masks 进行 inference
         """
-        return ImageMetadata(image_path, metadata['c2w_init'] if is_depth else metadata['c2w'], metadata['W'] // scale_factor, metadata['H'] // scale_factor,
+        return ImageMetadata(image_path, metadata['c2w'] if is_depth else metadata['c2w'], metadata['W'] // scale_factor, metadata['H'] // scale_factor,
                              intrinsics, image_index, None if (is_val and self.hparams.all_val) else mask_path, is_val, self.pose_scale_factor, is_depth)
 
     def _get_experiment_path(self) -> Path:

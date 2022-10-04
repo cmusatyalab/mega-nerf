@@ -11,55 +11,6 @@ from PIL import Image
 import re
 
 
-def read_pfm(file):
-    """ Read a pfm file """
-    file = open(file, 'rb')
-
-    color = None
-    width = None
-    height = None
-    scale = None
-    endian = None
-
-    header = file.readline().rstrip()
-    header = str(bytes.decode(header, encoding='utf-8'))
-    if header == 'PF':
-        color = True
-    elif header == 'Pf':
-        color = False
-    else:
-        raise Exception('Not a PFM file.')
-
-    pattern = r'^(\d+)\s(\d+)\s$'
-    temp_str = str(bytes.decode(file.readline(), encoding='utf-8'))
-    dim_match = re.match(pattern, temp_str)
-    if dim_match:
-        width, height = map(int, dim_match.groups())
-    else:
-        temp_str += str(bytes.decode(file.readline(), encoding='utf-8'))
-        dim_match = re.match(pattern, temp_str)
-        if dim_match:
-            width, height = map(int, dim_match.groups())
-        else:
-            raise Exception('Malformed PFM header: width, height cannot be found')
-
-    scale = float(file.readline().rstrip())
-    if scale < 0: # little-endian
-        endian = '<'
-        scale = -scale
-    else:
-        endian = '>' # big-endian
-
-    data = np.fromfile(file, endian + 'f')
-    shape = (height, width, 3) if color else (height, width)
-
-    data = np.reshape(data, shape)
-    # DEY: I don't know why this was there.
-    file.close()
-    
-    return data
-
-
 class ImageMetadata:
     def __init__(self, image_path: Path, c2w: torch.Tensor, W: int, H: int, intrinsics: torch.Tensor, image_index: int,
                  mask_path: Optional[Path], is_val: bool, pose_scale_factor, is_depth: bool):
@@ -105,7 +56,8 @@ class ImageMetadata:
         Returns:
         - torch.Tensor: 深度图片的缩放后的 tensor (self.W, self.H, 1)
         """
-        depths = read_pfm(self.image_path)
+        depths = Image.open(self.image_path).convert("L")
+        depths = np.asarray(depths, dtype=np.float32)
         depths[depths > 150] = 150
         depths /= self.pose_scale_factor
         depths = np.ascontiguousarray(depths)

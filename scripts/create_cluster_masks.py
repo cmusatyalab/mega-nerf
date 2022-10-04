@@ -72,7 +72,7 @@ def main(hparams: Namespace) -> None:
                          + list((dataset_path / 'val' / f'metadata_depth_{track}').iterdir()) for track in depth_tracks]
 
     camera_positions_rgb = torch.cat([torch.load(x, map_location='cpu')['c2w'][:3, 3].unsqueeze(0) for x in metadata_rgb_paths])
-    camera_positions_depths = [torch.cat([torch.load(x, map_location='cpu')['c2w_init'][:3, 3].unsqueeze(0) for x in metadata_depth_path]) for metadata_depth_path in metadata_depth_paths]
+    camera_positions_depths = [torch.cat([torch.load(x, map_location='cpu')['c2w'][:3, 3].unsqueeze(0) for x in metadata_depth_path]) for metadata_depth_path in metadata_depth_paths]
     all_camera_positions = torch.cat([camera_positions_rgb] + camera_positions_depths)
     main_print('Number of images in rgb dir: {}'.format(camera_positions_rgb.shape))
     main_print('Number of images in depth dir: {}'.format([camera_positions.shape for camera_positions in camera_positions_depths]))
@@ -155,7 +155,7 @@ def main(hparams: Namespace) -> None:
 
                 metadata = torch.load(metadata_path, map_location='cpu')
 
-                c2w = metadata['c2w'].to(device) if track == 'rgb' else metadata['c2w_init'].to(device)
+                c2w = metadata['c2w'].to(device) if track == 'rgb' else metadata['c2w'].to(device)
                 intrinsics = metadata['intrinsics']
                 directions = get_ray_directions(metadata['W'],
                                                 metadata['H'],

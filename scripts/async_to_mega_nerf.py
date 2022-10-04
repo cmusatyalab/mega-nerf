@@ -13,6 +13,7 @@ import random
 from tqdm import tqdm
 import transformations
 import pfm_utils
+from PIL import Image
 
 def _get_opts():
     parser = argparse.ArgumentParser()
@@ -52,6 +53,9 @@ rgb_names = [x for x in Path(basepath / 'rgb').iterdir() if x.suffix == '.jpg']
 rgb_names = sorted(rgb_names, key= lambda x: float(x.stem))
 depth_names = [[x for x in Path(basepath / f'depth_{track}').iterdir() if x.suffix == '.pfm'] for track in depth_tracks]
 depth_names = [sorted(track, key= lambda x: float(x.stem)) for track in depth_names]
+depthvis_names = [[x for x in Path(basepath / f'depthvis_{track}').iterdir() if x.suffix == '.jpg'] for track in depth_tracks]
+depthvis_names = [sorted(track, key= lambda x: float(x.stem)) for track in depthvis_names]
+assert len(depth_names) == len(depthvis_names)
 
 print(f'found {len(rgb_names)} rgb images, {[len(track) for track in depth_names]} depth images in {basepath}')
 assert len(rgb_names) > 0, "No image found"
@@ -76,6 +80,7 @@ else:
 
 rgb_names = np.array(rgb_names)[rgb_samples]
 depth_names = [np.array(depth_names[i])[depth_samples[i]] for i in range(len(depth_names))]
+depthvis_names = [np.array(depthvis_names[i])[depth_samples[i]] for i in range(len(depthvis_names))]
 n_rgb, n_depth = len(rgb_names), [len(depth_names_track) for depth_names_track in depth_names]
 n_samples = [n_rgb + n for n in n_depth]
 
@@ -153,15 +158,17 @@ dirs = [
     mega_path / 'val' / 'rgbs',
     mega_path / 'val' / 'metadata_rgb' ] + \
     [(mega_path / 'train' / f'depth_{track}') for track in depth_tracks] + \
+    [(mega_path / 'train' / f'depthvis_{track}') for track in depth_tracks] + \
     [(mega_path / 'train' / f'metadata_depth_{track}') for track in depth_tracks] + \
     [(mega_path / 'val' / f'depth_{track}') for track in depth_tracks] + \
+    [(mega_path / 'val' / f'depthvis_{track}') for track in depth_tracks] + \
     [(mega_path / 'val' / f'metadata_depth_{track}') for track in depth_tracks]
 
 for dir in dirs:
     if not dir.exists():
         dir.mkdir(parents=True)
 
-def save_track(name, poses, positions, image_names):
+def save_track(name, poses, positions, image_names, depthvis_name):
     with open(os.path.join(mega_path, f'mappings_{name}.txt'),mode='w') as f:
         for idx, _ in enumerate(tqdm(image_names)):
             if idx % int(positions.shape[0] / num_val) == 0:
@@ -174,6 +181,10 @@ def save_track(name, poses, positions, image_names):
                 cv2.imwrite(os.path.join(split_dir,'rgbs','{0:06d}.jpg'.format(idx)),color)
                 image = color
             else:
+                depthvis_path = depthvis_name[idx]
+                depthvis = np.asarray(Image.open(depthvis_path).convert("L"), dtype=np.float32)
+                cv2.imwrite(os.path.join(split_dir, 'depthvis' + name.split('depth')[1],'{0:06d}.jpg'.format(idx)), depthvis)
+
                 depth_path = image_names[idx]
                 depth, scale = pfm_utils.read_pfm(depth_path)
                 depth = np.flip(depth, axis=0)
@@ -188,7 +199,7 @@ def save_track(name, poses, positions, image_names):
             torch.save({
                 'H': image.shape[0],
                 'W': image.shape[1],
-                'c2w' if name == 'rgb' else 'c2w_init': torch.cat(
+                'c2w' if name == 'rgb' else 'c2w': torch.cat(
                     [camera_in_drb[:, 1:2], -camera_in_drb[:, :1], camera_in_drb[:, 2:4]],
                     -1), #变为右上后，又和nice-slam（nerf-pytorch保持一致了），局部为右上后，全局为下右后（不懂为啥要搞这么复杂）
                 'intrinsics': torch.FloatTensor(
@@ -197,11 +208,12 @@ def save_track(name, poses, positions, image_names):
                 'timestamp': torch.tensor(float(image_names[idx].stem),dtype=torch.float64)
             }, os.path.join(split_dir,f'metadata_{name}',metadata_name))
             f.write('{},{}\n'.format(('{0:06d}.jpg' if name == 'rgb' else '{0:06d}.pfm').format(idx), metadata_name))
+    return
 
 print("exporting rgb data")
-save_track('rgb', rgb_pose, rgb_positions, rgb_names)
+save_track('rgb', rgb_pose, rgb_positions, rgb_names, None)
 print("exporting depth data")
-[save_track(f"depth_{track}", depth_pose[i], depth_positions[i], depth_names[i]) for i, track in enumerate(tqdm(depth_tracks))]
+[save_track(f"depth_{track}", depth_pose[i], depth_positions[i], depth_names[i], depthvis_names[i]) for i, track in enumerate(tqdm(depth_tracks))]
 
 coordinates = {
     'origin_drb': origin,
