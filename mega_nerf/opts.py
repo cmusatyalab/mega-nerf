@@ -41,7 +41,7 @@ def get_opts_base():
 
     parser.add_argument('--pos_xyz_dim', type=int, default=12,
                         help='frequency encoding dimension applied to xyz position')
-    parser.add_argument('--pos_dir_dim', type=int, default=4,
+    parser.add_argument('--pos_dir_dim', type=int, default=12,
                         help='frequency encoding dimension applied to view direction (set to 0 to disable)')
     parser.add_argument('--layers', type=int, default=8, help='number of layers in MLP')
     parser.add_argument('--skip_layers', type=int, nargs='+', default=[4], help='indices of the skip connections')
@@ -100,4 +100,11 @@ def get_opts_base():
     parser.add_argument('--detect_anomalies', default=False, action='store_true')
     parser.add_argument('--random_seed', type=int, default=42)
 
+    parser.add_argument('--photo_weight', type=float, default=1.0, help='weight of photo loss')
+    parser.add_argument('--depth_weight', type=float, default=1.0, help='weight for depth loss')
+
+    parser.add_argument('--sigma_zeroinit', default=False, action='store_true')
+
+    parser.add_argument('--depth_track', type=str, help='depth track name')
+    parser.add_argument('--centroid', type=int, help='centroid number to be optimized, 0-indexed')
     return parser

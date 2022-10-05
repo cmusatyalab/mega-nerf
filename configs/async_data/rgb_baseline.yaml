@@ -1,0 +1,10 @@
+ray_altitude_range: [-5, 30]
+val_interval: 3000
+ckpt_interval: 10000
+coarse_samples: 256
+fine_samples: 512
+batch_size: 256
+no_bg_nerf: True
+
+photo_weight: 1.0
+depth_weight: 0.0

@@ -17,6 +17,9 @@ class Embedding(nn.Module):
         else:
             self.freq_bands = torch.linspace(1, 2 ** (num_freqs - 1), num_freqs)
 
+    def get_out_channels(self, d_in=3):
+        return (len(self.freq_bands) * 2 + 1) * d_in
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         out = [x]
         for freq in self.freq_bands:
@@ -45,7 +48,7 @@ class ShiftedSoftplus(nn.Module):
 class NeRF(nn.Module):
     def __init__(self, pos_xyz_dim: int, pos_dir_dim: int, layers: int, skip_layers: List[int], layer_dim: int,
                  appearance_dim: int, affine_appearance: bool, appearance_count: int, rgb_dim: int, xyz_dim: int,
-                 sigma_activation: nn.Module):
+                 sigma_activation: nn.Module, sigma_zeroinit: bool):
         super(NeRF, self).__init__()
         self.xyz_dim = xyz_dim
 
@@ -102,6 +105,9 @@ class NeRF(nn.Module):
 
         # output layers
         self.sigma = nn.Linear(layer_dim, 1)
+        if sigma_zeroinit:
+            self.sigma.weight.data.normal_(mean=0, std=0.1)
+            self.sigma.bias.data.fill_(0.)
         self.sigma_activation = sigma_activation
 
         self.rgb = nn.Linear(
@@ -113,7 +119,7 @@ class NeRF(nn.Module):
             self.rgb_activation = None  # We're using spherical harmonics and will convert to sigmoid in rendering.py
 
     def forward(self, x: torch.Tensor, sigma_only: bool = False,
-                sigma_noise: Optional[torch.Tensor] = None) -> torch.Tensor:
+                sigma_noise: Optional[torch.Tensor] = None, neus_mode=False) -> torch.Tensor:
         expected = self.xyz_dim \
                    + (0 if (sigma_only or self.embedding_dir is None) else 3) \
                    + (0 if (sigma_only or self.embedding_a is None) else 1)
@@ -122,7 +128,8 @@ class NeRF(nn.Module):
             raise Exception(
                 'Unexpected input shape: {} (expected: {}, xyz_dim: {})'.format(x.shape, expected, self.xyz_dim))
 
-        input_xyz = self.embedding_xyz(x[:, :self.xyz_dim])
+        gradient_x = x[:, :self.xyz_dim].requires_grad_()
+        input_xyz = self.embedding_xyz(gradient_x)
         xyz_ = input_xyz
         for i, xyz_encoding in enumerate(self.xyz_encodings):
             if i in self.skip_layers:
@@ -136,7 +143,19 @@ class NeRF(nn.Module):
         sigma = self.sigma_activation(sigma)
 
         if sigma_only:
-            return sigma
+            return sigma, None
+
+        if neus_mode:
+            gradient = torch.autograd.grad(
+                outputs = sigma,
+                inputs = gradient_x,
+                grad_outputs = torch.ones_like(sigma, requires_grad=False, device=sigma.device),
+                create_graph = True,
+                retain_graph = True,
+                only_inputs = True
+            )[0]
+        else:
+            gradient = None
 
         if self.xyz_encoding_final is not None:
             xyz_encoding_final = self.xyz_encoding_final(xyz_)
@@ -157,4 +176,4 @@ class NeRF(nn.Module):
             affine_transform = self.affine(self.embedding_a(x[:, -1].long())).view(-1, 3, 4)
             rgb = (affine_transform[:, :, :3] @ rgb.unsqueeze(-1) + affine_transform[:, :, 3:]).squeeze(-1)
 
-        return torch.cat([self.rgb_activation(rgb) if self.rgb_activation is not None else rgb, sigma], -1)
+        return torch.cat([self.rgb_activation(rgb) if self.rgb_activation is not None else rgb, sigma], -1), gradient

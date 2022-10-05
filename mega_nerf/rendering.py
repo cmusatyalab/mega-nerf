@@ -1,15 +1,49 @@
+from operator import inv
 import os
 from argparse import Namespace
+from pathlib import Path
 from typing import Optional, Dict, Callable, Tuple
 
 import torch
 import torch.nn.functional as F
 from torch import nn
-
 from mega_nerf.spherical_harmonics import eval_sh
 
 TO_COMPOSITE = {'rgb', 'depth'}
 INTERMEDIATE_KEYS = {'zvals_coarse', 'raw_rgb_coarse', 'raw_sigma_coarse', 'depth_real_coarse'}
+
+
+def sample_pdf(bins, weights, n_samples, det=False):
+    # This implementation is from NeRF
+    # Get pdf
+    weights = weights + 1e-5  # prevent nans
+    pdf = weights / torch.sum(weights, -1, keepdim=True)
+    cdf = torch.cumsum(pdf, -1)
+    cdf = torch.cat([torch.zeros_like(cdf[..., :1]), cdf], -1).to(bins.device)
+    # Take uniform samples
+    if det:
+        u = torch.linspace(0. + 0.5 / n_samples, 1. - 0.5 / n_samples, steps=n_samples)
+        u = u.expand(list(cdf.shape[:-1]) + [n_samples])
+    else:
+        u = torch.rand(list(cdf.shape[:-1]) + [n_samples])
+
+    # Invert CDF
+    u = u.contiguous().to(bins.device)
+    inds = torch.searchsorted(cdf, u, right=True)
+    below = torch.max(torch.zeros_like(inds - 1), inds - 1)
+    above = torch.min((cdf.shape[-1] - 1) * torch.ones_like(inds), inds)
+    inds_g = torch.stack([below, above], -1)  # (batch, N_samples, 2)
+
+    matched_shape = [inds_g.shape[0], inds_g.shape[1], cdf.shape[-1]]
+    cdf_g = torch.gather(cdf.unsqueeze(1).expand(matched_shape), 2, inds_g)
+    bins_g = torch.gather(bins.unsqueeze(1).expand(matched_shape), 2, inds_g)
+
+    denom = (cdf_g[..., 1] - cdf_g[..., 0])
+    denom = torch.where(denom < 1e-5, torch.ones_like(denom), denom)
+    t = (u - cdf_g[..., 0]) / denom
+    samples = bins_g[..., 0] + t * (bins_g[..., 1] - bins_g[..., 0])
+
+    return samples
 
 
 def render_rays(nerf: nn.Module,
@@ -21,7 +55,8 @@ def render_rays(nerf: nn.Module,
                 sphere_radius: Optional[torch.Tensor],
                 get_depth: bool,
                 get_depth_variance: bool,
-                get_bg_fg_rgb: bool) -> Tuple[Dict[str, torch.Tensor], bool]:
+                get_bg_fg_rgb: bool,
+                ) -> Tuple[Dict[str, torch.Tensor], bool]:
     """
     根据输入的 rays, 返回对应的渲染结果
     Inputs:
@@ -42,7 +77,6 @@ def render_rays(nerf: nn.Module,
     - get_depth: 是否获取深度图
     - get_depth_variance: 是否获取深度图的方差
     - get_bg_fg_rgb: 是否获取前景背景渲染图片
-    TODO: 补充
     """
     N_rays = rays.shape[0]
 
@@ -105,7 +139,8 @@ def render_rays(nerf: nn.Module,
                                                                                          fine_z_vals,
                                                                                          sphere_center, sphere_radius,
                                                                                          include_xyz_real,
-                                                                                         cluster_2d))
+                                                                                         cluster_2d),
+                                      )
 
     else:
         rays_o = rays_o.view(rays_o.shape[0], 1, rays_o.shape[1])
@@ -130,7 +165,8 @@ def render_rays(nerf: nn.Module,
                            get_bg_lambda=bg_nerf is not None,
                            flip=False,
                            depth_real=None,
-                           xyz_fine_fn=lambda fine_z_vals: (rays_o + rays_d * fine_z_vals.unsqueeze(-1), None))
+                           xyz_fine_fn=lambda fine_z_vals: (rays_o + rays_d * fine_z_vals.unsqueeze(-1), None),
+                           )
 
     if bg_nerf is not None:
         types = ['fine' if hparams.fine_samples > 0 else 'coarse']
@@ -199,7 +235,8 @@ def render_rays(nerf: nn.Module,
                                                                                        fine_z_vals,
                                                                                        sphere_center, sphere_radius,
                                                                                        include_xyz_real,
-                                                                                       cluster_2d))
+                                                                                       cluster_2d),
+                                    )
         results[f'rgb_{types[0]}'][:0] += 0 * grad_results[f'rgb_{types[0]}']
         bg_nerf_rays_present = True
 
@@ -218,7 +255,8 @@ def _get_results(nerf: nn.Module,
                  get_bg_lambda: bool,
                  flip: bool,
                  depth_real: Optional[torch.Tensor],
-                 xyz_fine_fn: Callable[[torch.Tensor], Tuple[torch.Tensor, Optional[torch.Tensor]]]) \
+                 xyz_fine_fn: Callable[[torch.Tensor], Tuple[torch.Tensor, Optional[torch.Tensor]]],
+                 ) \
         -> Dict[str, torch.Tensor]:
     results = {}
 
@@ -240,7 +278,8 @@ def _get_results(nerf: nn.Module,
                get_weights=hparams.fine_samples > 0,
                get_bg_lambda=get_bg_lambda and hparams.use_cascade,
                flip=flip,
-               depth_real=depth_real)
+               depth_real=depth_real,
+               )
 
     if hparams.fine_samples > 0:  # sample points for fine model
         z_vals_mid = 0.5 * (z_vals[:, :-1] + z_vals[:, 1:])  # (N_rays, N_samples-1) interval mid points
@@ -269,10 +308,11 @@ def _get_results(nerf: nn.Module,
                    composite_rgb=True,
                    get_depth=get_depth,
                    get_depth_variance=get_depth_variance,
-                   get_weights=False,
+                   get_weights=True,
                    get_bg_lambda=get_bg_lambda,
                    flip=flip,
-                   depth_real=depth_real_fine)
+                   depth_real=depth_real_fine,
+                   )
 
         for key in INTERMEDIATE_KEYS:
             if key in results:
@@ -296,7 +336,9 @@ def _inference(results: Dict[str, torch.Tensor],
                get_weights: bool,
                get_bg_lambda: bool,
                flip: bool,
-               depth_real: Optional[torch.Tensor]):
+               depth_real: Optional[torch.Tensor],
+               ):
+    depth_real = None
     N_rays_ = xyz.shape[0]
     N_samples_ = xyz.shape[1]
 
@@ -310,6 +352,7 @@ def _inference(results: Dict[str, torch.Tensor],
     # Perform model inference to get rgb and raw sigma
     B = xyz_.shape[0]
     out_chunks = []
+    out_gradients = []
     rays_d_ = rays_d.repeat(1, N_samples_, 1).view(-1, rays_d.shape[-1])
 
     if image_indices is not None:
@@ -327,9 +370,9 @@ def _inference(results: Dict[str, torch.Tensor],
             sigma_noise = torch.rand(len(xyz_chunk), 1, device=xyz_chunk.device) if nerf.training else None
 
             if hparams.use_cascade:
-                model_chunk = nerf(typ == 'coarse', xyz_chunk, sigma_noise=sigma_noise)
+                model_chunk, gradient = nerf(typ == 'coarse', xyz_chunk, sigma_noise=sigma_noise)
             else:
-                model_chunk = nerf(xyz_chunk, sigma_noise=sigma_noise)
+                model_chunk, gradient = nerf(xyz_chunk, sigma_noise=sigma_noise)
 
             if hparams.sh_deg is not None:
                 rgb = torch.sigmoid(
@@ -339,6 +382,7 @@ def _inference(results: Dict[str, torch.Tensor],
                 out_chunks += [torch.cat([rgb, model_chunk[:, rgb_dim:]], -1)]
             else:
                 out_chunks += [model_chunk]
+            out_gradients += [gradient]
     else:
         # (N_rays*N_samples_, embed_dir_channels)
         for i in range(0, B, hparams.model_chunk_size):
@@ -354,11 +398,12 @@ def _inference(results: Dict[str, torch.Tensor],
             sigma_noise = torch.rand(len(xyz_chunk), 1, device=xyz_chunk.device) if nerf.training else None
 
             if hparams.use_cascade:
-                model_chunk = nerf(typ == 'coarse', xyz_chunk, sigma_noise=sigma_noise)
+                model_chunk, gradient = nerf(typ == 'coarse', xyz_chunk, sigma_noise=sigma_noise)
             else:
-                model_chunk = nerf(xyz_chunk, sigma_noise=sigma_noise)
+                model_chunk, gradient = nerf(xyz_chunk, sigma_noise=sigma_noise)
 
             out_chunks += [model_chunk]
+            out_gradients += [gradient]
 
     out = torch.cat(out_chunks, 0)
     out = out.view(N_rays_, N_samples_, out.shape[-1])
@@ -370,12 +415,10 @@ def _inference(results: Dict[str, torch.Tensor],
         # combine coarse and fine samples
         z_vals, ordering = torch.sort(torch.cat([z_vals, results['zvals_coarse']], -1), -1, descending=flip)
         rgbs = torch.cat((
-            torch.gather(torch.cat((rgbs[..., 0], results['raw_rgb_coarse'][..., 0]), 1), 1, ordering).unsqueeze(
-                -1),
-            torch.gather(torch.cat((rgbs[..., 1], results['raw_rgb_coarse'][..., 1]), 1), 1, ordering).unsqueeze(
-                -1),
-            torch.gather(torch.cat((rgbs[..., 2], results['raw_rgb_coarse'][..., 2]), 1), 1, ordering).unsqueeze(-1)
-        ), -1)
+            torch.gather(torch.cat((rgbs[..., 0], results['raw_rgb_coarse'][..., 0]), 1), 1, ordering).unsqueeze( -1),
+            torch.gather(torch.cat((rgbs[..., 1], results['raw_rgb_coarse'][..., 1]), 1), 1, ordering).unsqueeze( -1),
+            torch.gather(torch.cat((rgbs[..., 2], results['raw_rgb_coarse'][..., 2]), 1), 1, ordering).unsqueeze(-1))
+            , -1)
         sigmas = torch.gather(torch.cat((sigmas, results['raw_sigma_coarse']), 1), 1, ordering)
 
         if depth_real is not None:
@@ -402,25 +445,25 @@ def _inference(results: Dict[str, torch.Tensor],
     if get_weights:
         results[f'weights_{typ}'] = weights
 
+    results[f'zvals_{typ}'] = z_vals
+    results[f'raw_sigma_{typ}'] = sigmas
     if composite_rgb:
         results[f'rgb_{typ}'] = (weights.unsqueeze(-1) * rgbs).sum(dim=1)  # n1 n2 c -> n1 c
     else:
-        results[f'zvals_{typ}'] = z_vals
         results[f'raw_rgb_{typ}'] = rgbs
-        results[f'raw_sigma_{typ}'] = sigmas
         if depth_real is not None:
             results[f'depth_real_{typ}'] = depth_real
 
+    if get_depth or get_depth_variance:
+        if depth_real is not None:
+            depth_map = (weights * depth_real).sum(dim=1)  # n1 n2 -> n1
+        else:
+            depth_map = (weights * z_vals).sum(dim=1)  # n1 n2 -> n1
+
+    if get_depth:
+        results[f'depth_{typ}'] = depth_map
+
     with torch.no_grad():
-        if get_depth or get_depth_variance:
-            if depth_real is not None:
-                depth_map = (weights * depth_real).sum(dim=1)  # n1 n2 -> n1
-            else:
-                depth_map = (weights * z_vals).sum(dim=1)  # n1 n2 -> n1
-
-        if get_depth:
-            results[f'depth_{typ}'] = depth_map
-
         if get_depth_variance:
             results[f'depth_variance_{typ}'] = (weights * (z_vals - depth_map.unsqueeze(1)).square()).sum(
                 axis=-1)

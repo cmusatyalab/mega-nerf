@@ -4,6 +4,8 @@ from pathlib import Path
 import torch
 from torch.nn.modules.utils import consume_prefix_in_state_dict_if_present
 
+import sys
+sys.path.append(str(Path.cwd()))
 from mega_nerf.models.mega_nerf import MegaNeRF
 from mega_nerf.models.mega_nerf_container import MegaNeRFContainer
 from mega_nerf.models.model_utils import get_nerf, get_bg_nerf
@@ -31,19 +33,23 @@ def main(hparams: Namespace) -> None:
     sub_modules = []
     bg_sub_modules = []
     for i in range(len(centroids)):
-        centroid_path = ckpt_prefix.parent / '{}{}'.format(ckpt_prefix.name, i)
+        centroid_path = ckpt_prefix.parent / '{}/{}'.format(ckpt_prefix.name, i)
 
         if not centroid_path.exists():
             raise Exception('{} not found'.format(centroid_path))
 
         version_dirs = sorted([int(x.name) for x in list(centroid_path.iterdir())], reverse=True)
         for version_dir in version_dirs:
-            checkpoint = centroid_path / str(version_dir) / 'models' / '{}.pt'.format(hparams.train_iterations)
-            if checkpoint.exists():
-                break
+            checkpoint_dir = centroid_path / str(version_dir) / 'models'
+            max_iter = 0
+            if checkpoint_dir.exists() and len(list(checkpoint_dir.iterdir())) > 2:
+                max_iter = max([int(x.name.split('.')[0]) for x in list(checkpoint_dir.iterdir())] + [max_iter])
+            checkpoint = checkpoint_dir / f'{max_iter}.pt'
 
         if not checkpoint.exists():
             raise Exception('Could not find {}.pt in {}'.format(hparams.train_iterations, centroid_path))
+        
+        print(f"use checkpoint {checkpoint} for submodule {i}")
 
         loaded = torch.load(checkpoint, map_location='cpu')
         consume_prefix_in_state_dict_if_present(loaded['model_state_dict'], prefix='module.')
