@@ -7,11 +7,15 @@ from tqdm import tqdm
 from pathlib import Path
 from tensorboardX import SummaryWriter
 
+torch.manual_seed(1)
+torch.cuda.manual_seed(1)
+torch.cuda.manual_seed_all(1)
+
 exp_folder = Path('exp')
 exp_name = str(max(int(name.name) for name in exp_folder.iterdir()) + 1)
 writer = SummaryWriter(f'exp/{exp_name}')
 
-pose_filename = 'traj.txt'
+pose_filename = 'manmade_12.txt'
 pose_format = 'kitti'
 valset_interval = 10
 logging.basicConfig(level=logging.DEBUG #设置日志输出格式
@@ -45,6 +49,8 @@ class PoseNet(nn.Module):
                 nn.ReLU(),
                 nn.Linear(256, 256),
                 nn.ReLU(),
+                nn.Linear(256, 256),
+                nn.ReLU(),
             )
         self.net2 = nn.Sequential(
                 nn.Linear(257, 256),
@@ -53,7 +59,9 @@ class PoseNet(nn.Module):
                 nn.ReLU(),
                 nn.Linear(128, 64),
                 nn.ReLU(),
-                nn.Linear(64, 12),
+                nn.Linear(64, 32),
+                nn.ReLU(),
+                nn.Linear(32, 12),
                 )
 
     def forward(self, t):
@@ -77,8 +85,8 @@ logger.info(f"frame num: {n_frames}, train set: {n_train}, val set: {n_val}")
 train_ts, val_ts = ts[train_idx], ts[val_idx]
 train_pose, val_pose = pose[train_idx], pose[val_idx]
 network = PoseNet().to(device)
-optimizer = torch.optim.Adam(list(network.parameters()), lr=1e-3)
-train_epoch = 60000
+optimizer = torch.optim.Adam(list(network.parameters()), lr=1e-2)
+train_epoch = 100000
 val_interval = 2000
 
 bar = tqdm(range(train_epoch))
@@ -100,7 +108,7 @@ for epoch in bar:
 
 torch.save(network, "checkpoint.pt")
 test_ts = ts
-output = network(test_ts).cpu().numpy()
+output = network(test_ts).cpu().detach().numpy()
 
-output_filename = 'out_traj.txt'
+output_filename = 'manmade_12_out.txt'
 np.savetxt(output_filename, output)
